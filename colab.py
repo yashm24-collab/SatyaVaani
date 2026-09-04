@@ -13,7 +13,7 @@ slower and there is no reason to be on Colab at all.
 # CELL 1 -- setup
 # =====================================================================
 CELL_1 = r"""
-!git clone https://github.com/YOUR_USERNAME/SatyaVaani.git repo
+!git clone https://github.com/yashm24-collab/SatyaVaani.git repo
 %cd repo
 !git pull                      # re-run this cell after any local push
 
