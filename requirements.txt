@@ -1,0 +1,11 @@
+# Core pipeline: numpy only. satyavaani.py, mic.py, server.py, ui.html all run
+# with just this plus the standard library.
+numpy>=1.24
+
+# Live microphone (server.py without a file argument, and `python mic.py --live`)
+sounddevice>=0.4
+
+# Model work only -- persons 1+2. Everyone else can skip these.
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+# torch          # CPU wheel is ~200 MB; the default CUDA build is multi-GB
+# torchaudio     # only needed to read ASVspoof's FLAC. wav works without it.

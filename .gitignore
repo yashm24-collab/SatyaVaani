@@ -1,0 +1,12 @@
+# Trained checkpoints. get_scorer() auto-loads satyavaani.pt, so a stray one
+# silently turns the UI from PLACEHOLDER to "trained" -- never commit them.
+*.pt
+
+# Feature caches (hundreds of MB) and generated data
+*.npz
+attacks/
+manifest.csv
+
+# Runtime junk
+*.log
+__pycache__/
