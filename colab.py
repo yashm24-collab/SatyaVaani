@@ -30,13 +30,22 @@ train.smoke()                  # proves the loop before any data exists
 # CELL 2 -- get ASVspoof 2019 LA.  YOU FILL THIS IN.
 # =====================================================================
 CELL_2 = r"""
-# Kaggle route. Get kaggle.json first:
-#   kaggle.com -> your avatar -> Settings -> API -> Create New Token
-from google.colab import files
-files.upload()                       # pick kaggle.json
+# Kaggle credentials.
+#
+# NEVER paste the token into a cell as a literal. Colab saves cell text AND
+# output into the .ipynb, so a pasted token travels with every share, export
+# and screenshot of that notebook. getpass keeps it out of both.
+#
+# Get one: kaggle.com -> avatar -> Settings -> API -> Create New Token
+import os, getpass
 
-!mkdir -p ~/.kaggle && cp kaggle.json ~/.kaggle/ && chmod 600 ~/.kaggle/kaggle.json
+os.environ["KAGGLE_API_TOKEN"] = getpass.getpass("Kaggle API token (KGAT_...): ").strip()
 !pip install -q kaggle
+
+# Older accounts issue kaggle.json (username + key) instead. If the download
+# below 401s, use this route instead and upload the file:
+#   from google.colab import files; files.upload()
+#   !mkdir -p ~/.kaggle && cp kaggle.json ~/.kaggle/ && chmod 600 ~/.kaggle/kaggle.json
 
 # Verified to exist. NOTE the slug really is "asvpoof" -- the typo is theirs.
 !kaggle datasets download -d anishsarkar22/asvpoof-2019-dataset-la -p /content/data --unzip
