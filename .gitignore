@@ -10,3 +10,12 @@ manifest.csv
 # Runtime junk
 *.log
 __pycache__/
+
+# Measured eval numbers written by train.report(). Derived, and a stale one
+# would show old numbers in the UI next to a new checkpoint.
+satyavaani.metrics.json
+
+# Personal / recorded audio. demo_clip.wav is the one committed sample.
+myvoice.wav
+clips/
+fakes/

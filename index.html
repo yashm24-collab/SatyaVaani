@@ -1,0 +1,1203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SatyaVaani</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* ------------------------------------------------------------------ tokens
+   The shader is the only saturated thing on screen. Everything else is
+   graphite and bone, so the wave reads as the instrument and the verdict
+   colour reads as the only other signal. */
+:root{
+  --void:#050507;
+  --ink:#0B0B0E;
+  --ink-2:#101015;
+  --rule:#1C1C23;
+  --rule-hi:#2A2A34;
+  --bone:#E8E6E1;
+  --dim:#7A7A88;
+  --dimmer:#4A4A57;
+
+  --low:#3DDC97;
+  --medium:#E8B84B;
+  --high:#FF5F56;
+  --none:#3A5257;
+  --live:var(--none);
+
+  --gap:14px;                /* dot grid pitch */
+  --dot:rgba(255,255,255,.07);
+  --energy:0;                /* 0..1, written each frame from the audio level */
+
+  --ease:cubic-bezier(.16,1,.3,1);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  /* Dot field, pure CSS: one repeating radial-gradient tile. No canvas, no
+     per-dot JS, no cost. The brighter dots near the orb are a second copy of
+     this same grid, masked and lit by the audio level (see .dotfield). */
+  background-color:var(--void);
+  background-image:radial-gradient(circle at center,var(--dot) 1px,transparent 1.4px);
+  background-size:var(--gap) var(--gap);
+  color:var(--bone);
+  font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* vignette only -- the dot grid is the texture now, scanlines on top of it
+   just read as moiré. */
+body::after{
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:90;
+  background:radial-gradient(135% 105% at 50% 42%,transparent 42%,rgba(0,0,0,.86) 100%);
+}
+
+/* ------------------------------------------------------------------- shell */
+.shell{
+  position:relative;z-index:1;height:100%;   /* above .twinkle */
+  /* stub / demo / header / stage / footer. Banner rows collapse to 0 when
+     hidden, so a banner pushes the header down instead of covering it. */
+  display:grid;grid-template-rows:auto auto auto 1fr auto;
+  opacity:0;animation:boot .9s var(--ease) .05s forwards;
+}
+@keyframes boot{to{opacity:1}}
+
+/* ------------------------------------------------------------------ header */
+header{
+  display:flex;align-items:center;gap:16px;
+  padding:20px 26px;z-index:30;
+}
+.mark{
+  font-family:"Bricolage Grotesque",system-ui,sans-serif;
+  font-weight:800;font-size:17px;letter-spacing:-.02em;
+  display:flex;align-items:baseline;gap:1px;
+}
+.mark em{font-style:normal;color:var(--dim);font-weight:400}
+.mark .dev{
+  font-family:"JetBrains Mono",monospace;font-size:8.5px;font-weight:500;
+  letter-spacing:.24em;color:var(--dimmer);margin-left:12px;
+  text-transform:uppercase;align-self:center;
+}
+
+.conn{
+  margin-left:auto;display:flex;align-items:center;gap:8px;
+  font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--dim);
+}
+/* Connection state only. Red is reserved for the verdict and means one thing. */
+.dot{
+  width:6px;height:6px;border-radius:50%;background:var(--dimmer);
+  transition:background .4s,box-shadow .4s;
+}
+.dot.on{background:#9FB4B8;box-shadow:0 0 9px 1px rgba(159,180,184,.7)}
+
+.burger{
+  width:38px;height:38px;margin-left:6px;border:1px solid var(--rule-hi);
+  border-radius:11px;background:var(--ink);cursor:pointer;
+  display:grid;place-items:center;gap:0;
+  transition:border-color .25s,background .25s,transform .25s var(--ease);
+}
+.burger:hover{border-color:#3A3A46;background:var(--ink-2)}
+.burger:active{transform:scale(.94)}
+.burger span{
+  display:block;width:15px;height:1.5px;background:var(--bone);border-radius:2px;
+  transition:transform .35s var(--ease),opacity .2s;
+}
+.burger span+span{margin-top:4px}
+.burger[aria-expanded="true"] span:nth-child(1){transform:translateY(5.5px) rotate(45deg)}
+.burger[aria-expanded="true"] span:nth-child(2){opacity:0}
+.burger[aria-expanded="true"] span:nth-child(3){transform:translateY(-5.5px) rotate(-45deg)}
+.burger .count{
+  position:absolute;transform:translate(15px,-14px);
+  font-size:8.5px;font-weight:700;color:var(--void);background:var(--bone);
+  min-width:15px;height:15px;border-radius:8px;display:grid;place-items:center;
+  padding:0 4px;letter-spacing:0;
+}
+.burger .count[hidden]{display:none}
+
+/* ------------------------------------------------------- placeholder banner
+   Safety-critical. Never let a stub score be mistaken for a result. */
+.stub{
+  z-index:40;display:none;padding:10px 26px;
+  background:rgba(255,95,86,.10);
+  border-bottom:1px solid rgba(255,95,86,.32);
+  color:var(--high);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
+}
+.stub.on{display:block}
+/* Different banner, different meaning: no backend at all, so nothing on screen
+   was measured. Amber, not red -- red means the verdict in this UI. */
+.stub.demo{
+  background:rgba(232,184,75,.09);
+  border-bottom-color:rgba(232,184,75,.30);
+  color:var(--medium);
+}
+
+/* ------------------------------------------------------------------- stage */
+.stage{
+  display:grid;place-items:center;position:relative;min-height:0;
+  padding:0 26px;
+}
+.orb{
+  position:relative;
+  width:min(58vh,min(560px,88vw));
+  aspect-ratio:1;
+  display:grid;place-items:center;
+}
+
+/* Soft blurred disc behind the orb, tinted to the current verdict. Both this
+   and .dotfield overhang the .orb box on purpose, so the light falls off into
+   the page instead of stopping at a rectangle. */
+.halo{
+  position:absolute;inset:-26%;border-radius:50%;pointer-events:none;
+  background:radial-gradient(circle at 50% 50%,
+    color-mix(in srgb,var(--live) 30%,transparent) 0%,
+    color-mix(in srgb,var(--live) 9%,transparent) 42%,
+    transparent 68%);
+  filter:blur(46px);
+  opacity:calc(.42 + var(--energy) * .58);
+  transform:scale(calc(1 + var(--energy) * .07));
+  transition:opacity .25s linear,transform .25s linear,background .6s ease;
+}
+
+/* Blinking dots across the page, masked OUT around the orb so the waveform
+   sits on clean black. Four layers on a 3x pitch, each offset and on its own
+   cycle -- a scattered subset blinks instead of the whole grid pulsing in
+   lockstep, which is what a single animated layer would look like. Still no
+   canvas and no per-dot JS. */
+.twinkle{
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  -webkit-mask-image:radial-gradient(circle at var(--orb-x,50%) var(--orb-y,46%),
+    transparent 0,transparent var(--orb-in,210px),#000 var(--orb-out,400px));
+  mask-image:radial-gradient(circle at var(--orb-x,50%) var(--orb-y,46%),
+    transparent 0,transparent var(--orb-in,210px),#000 var(--orb-out,400px));
+}
+.twinkle i{
+  position:absolute;inset:0;opacity:.06;
+  background-image:radial-gradient(circle at center,
+    rgba(206,222,232,.62) 1px,transparent 1.7px);
+  background-size:calc(var(--gap)*3) calc(var(--gap)*3);
+  animation-name:blink;animation-iteration-count:infinite;
+  animation-timing-function:ease-in-out;
+}
+@keyframes blink{0%,100%{opacity:.05}50%{opacity:.52}}
+/* negative delays so they are already out of phase on the first frame */
+.twinkle i:nth-child(1){background-position:0 0;
+  animation-duration:3.1s;animation-delay:0s}
+.twinkle i:nth-child(2){background-position:calc(var(--gap)*1) calc(var(--gap)*2);
+  animation-duration:4.7s;animation-delay:-1.2s}
+.twinkle i:nth-child(3){background-position:calc(var(--gap)*2) calc(var(--gap)*1);
+  animation-duration:5.9s;animation-delay:-2.5s}
+.twinkle i:nth-child(4){background-position:calc(var(--gap)*1) 0;
+  animation-duration:3.8s;animation-delay:-3.4s}
+#gl{
+  position:absolute;inset:0;width:100%;height:100%;
+  /* The shaders paint glow on black. `screen` makes their black transparent,
+     so the canvas has no visible disc edge against the page. The mask fades
+     the shader's own ambient glow out before it hits the canvas rectangle --
+     without it you see a lit square where the glow gets clipped. */
+  mix-blend-mode:screen;
+  filter:saturate(1.06);
+  -webkit-mask-image:radial-gradient(circle at 50% 50%,#000 38%,transparent 70%);
+  mask-image:radial-gradient(circle at 50% 50%,#000 38%,transparent 70%);
+}
+/* breathing ring, drifts with state */
+.ring{
+  position:absolute;inset:8%;border-radius:50%;pointer-events:none;
+  border:1px solid var(--rule);
+  transition:border-color .6s,transform .6s var(--ease),opacity .6s;
+  opacity:.55;
+}
+.ring.b{inset:-2%;opacity:.28;border-style:dashed}
+[data-state="listening"] .ring{border-color:var(--rule-hi);transform:scale(1.03)}
+[data-state="processing"] .ring{border-color:var(--rule-hi);opacity:.8}
+[data-state="processing"] .ring.b{animation:spin 3.6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ---------------------------------------------------------------- readout */
+.readout{
+  position:absolute;left:50%;bottom:-4px;transform:translateX(-50%);
+  width:min(720px,92vw);text-align:center;pointer-events:none;
+}
+.kicker{
+  font-size:9px;letter-spacing:.3em;text-transform:uppercase;
+  color:var(--dim);margin-bottom:10px;height:1.2em;
+  transition:color .4s;
+}
+.action{
+  font-family:"Bricolage Grotesque",system-ui,sans-serif;
+  font-weight:600;font-size:clamp(19px,3.1vw,32px);line-height:1.15;
+  letter-spacing:-.015em;color:var(--live);
+  transition:color .5s ease,opacity .35s;
+  text-shadow:0 0 44px color-mix(in srgb,var(--live) 30%,transparent);
+  min-height:1.2em;text-wrap:balance;
+}
+.action.swap{opacity:0;transform:translateY(6px)}
+
+/* ------------------------------------------------------------------ footer */
+footer{
+  display:flex;align-items:center;justify-content:center;gap:26px;
+  padding:22px 26px 30px;z-index:30;flex-wrap:wrap;
+}
+
+.rec{
+  position:relative;display:flex;align-items:center;gap:12px;
+  height:52px;padding:0 26px 0 22px;
+  border:1px solid var(--rule-hi);border-radius:26px;
+  background:var(--ink);color:var(--bone);cursor:pointer;
+  font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:500;
+  letter-spacing:.18em;text-transform:uppercase;
+  transition:border-color .3s,background .3s,transform .2s var(--ease),color .3s;
+}
+.rec:hover:not(:disabled){border-color:#40404E;background:var(--ink-2)}
+.rec:active:not(:disabled){transform:scale(.97)}
+.rec:disabled{opacity:.4;cursor:not-allowed}
+.rec .led{
+  width:11px;height:11px;border-radius:50%;
+  background:var(--high);
+  box-shadow:0 0 0 0 rgba(255,95,86,.55);
+  transition:border-radius .3s var(--ease),background .3s;
+}
+[data-state="listening"] .rec{border-color:rgba(255,95,86,.5)}
+[data-state="listening"] .rec .led{
+  border-radius:3px;animation:pulse 1.6s ease-out infinite;
+}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 rgba(255,95,86,.5)}
+  70%{box-shadow:0 0 0 13px rgba(255,95,86,0)}
+  100%{box-shadow:0 0 0 0 rgba(255,95,86,0)}
+}
+
+.gauges{display:flex;align-items:center;gap:0}
+.g{padding:0 18px;border-left:1px solid var(--rule);min-width:96px}
+.g:first-child{border-left:0}
+.g .k{font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--dimmer);margin-bottom:5px}
+.g .v{font-size:14px;font-weight:500;font-variant-numeric:tabular-nums;color:#B9B9C6}
+.g .v.tint{color:var(--live);transition:color .5s}
+.g .v.warn{color:var(--high)}
+
+/* -------------------------------------------------------------- the drawer
+   "long rectangle, curved edges" -- a tall rounded panel off the right edge. */
+.scrim{
+  position:fixed;inset:0;z-index:50;background:rgba(3,3,5,.6);
+  backdrop-filter:blur(3px);opacity:0;pointer-events:none;
+  transition:opacity .45s var(--ease);
+}
+.scrim.on{opacity:1;pointer-events:auto}
+
+.drawer{
+  position:fixed;z-index:60;top:14px;bottom:14px;right:14px;
+  width:min(430px,calc(100vw - 28px));
+  background:linear-gradient(180deg,var(--ink-2),var(--ink));
+  border:1px solid var(--rule-hi);border-radius:24px;
+  display:flex;flex-direction:column;overflow:hidden;
+  transform:translateX(calc(100% + 20px));
+  transition:transform .55s var(--ease);
+  box-shadow:-30px 0 90px -30px #000, 0 0 0 1px rgba(255,255,255,.02) inset;
+}
+.drawer.on{transform:none}
+
+.dhead{
+  padding:20px 22px 15px;border-bottom:1px solid var(--rule);
+  display:flex;align-items:baseline;gap:10px;flex-shrink:0;
+}
+.dhead h2{
+  font-family:"Bricolage Grotesque",system-ui,sans-serif;
+  font-size:15px;font-weight:600;letter-spacing:-.01em;
+}
+.dhead .n{margin-left:auto;font-size:9px;letter-spacing:.2em;color:var(--dimmer);text-transform:uppercase}
+.dclose{
+  align-self:center;flex-shrink:0;margin-left:10px;
+  width:30px;height:30px;border:1px solid var(--rule-hi);border-radius:9px;
+  background:transparent;color:var(--dim);cursor:pointer;
+  font-family:inherit;font-size:16px;line-height:1;
+  display:grid;place-items:center;
+  transition:color .2s,border-color .2s,background .2s,transform .2s var(--ease);
+}
+.dclose:hover{color:var(--bone);border-color:#3A3A46;background:rgba(255,255,255,.04)}
+.dclose:active{transform:scale(.9)}
+
+/* Pinned above the session list. REQ-5: seen and held-out reported separately,
+   everywhere results appear -- so it is not something you can scroll past. */
+.evalcard{
+  margin:14px 14px 0;padding:13px 14px;flex-shrink:0;
+  border:1px solid var(--rule);border-radius:16px;background:rgba(255,255,255,.016);
+}
+.evalcard .h{
+  font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--dimmer);margin-bottom:11px;display:flex;gap:8px;align-items:baseline;
+}
+.evalcard .h span{margin-left:auto;letter-spacing:.08em;text-transform:none}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sp{border:1px solid var(--rule);border-radius:11px;padding:10px 11px;background:rgba(0,0,0,.22)}
+.sp .lab{font-size:8px;letter-spacing:.16em;text-transform:uppercase;color:var(--dimmer);margin-bottom:6px}
+.sp .big{font-size:20px;font-weight:500;font-variant-numeric:tabular-nums;line-height:1.1;color:#C6C6D2}
+.sp .big.miss{font-size:11px;font-weight:700;color:var(--medium);letter-spacing:.1em;padding:4px 0 5px}
+/* also matches the summary line below the split, which sits outside .sp */
+.evalcard .sub{font-size:9px;line-height:1.7;color:var(--dim);margin-top:5px;letter-spacing:.05em}
+.evalcard .none{font-size:10.5px;color:var(--dim);line-height:1.8}
+.evalcard .none code{color:#A9A9B8;font-size:10px}
+
+.dbody{overflow-y:auto;padding:14px;flex:1;scrollbar-width:thin;scrollbar-color:var(--rule-hi) transparent}
+.dbody::-webkit-scrollbar{width:7px}
+.dbody::-webkit-scrollbar-thumb{background:var(--rule-hi);border-radius:4px}
+
+.empty{
+  padding:52px 20px;text-align:center;color:var(--dimmer);font-size:11px;line-height:1.9;
+}
+
+.card{
+  border:1px solid var(--rule);border-radius:16px;background:rgba(255,255,255,.016);
+  padding:14px 15px;margin-bottom:10px;
+  animation:slide .5s var(--ease) both;
+}
+@keyframes slide{from{opacity:0;transform:translateY(10px)}}
+.card .top{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+.card .pip{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.card .bandname{font-size:9px;letter-spacing:.2em;text-transform:uppercase;font-weight:700}
+.card .time{margin-left:auto;font-size:9px;color:var(--dimmer);letter-spacing:.08em}
+.card .sample{
+  font-size:7.5px;font-weight:700;letter-spacing:.16em;padding:2px 6px;border-radius:4px;
+  background:rgba(232,184,75,.16);color:var(--medium);
+  border:1px solid rgba(232,184,75,.32);
+}
+.card .act{
+  font-family:"Bricolage Grotesque",system-ui,sans-serif;
+  font-size:14px;font-weight:600;line-height:1.32;margin-bottom:11px;letter-spacing:-.01em;
+}
+.card .meta{
+  display:flex;gap:16px;flex-wrap:wrap;
+  font-size:9.5px;color:var(--dim);letter-spacing:.06em;
+}
+.card .meta b{color:#9E9EAC;font-weight:500;font-variant-numeric:tabular-nums}
+.card canvas.heat{
+  display:block;width:100%;height:42px;margin-top:11px;
+  border:1px solid var(--rule);border-radius:8px;background:#08080B;
+}
+.card canvas.trace{
+  display:block;width:100%;height:64px;margin-top:11px;
+  border:1px solid var(--rule);border-radius:8px;background:#08080B;
+}
+.card .evlab{
+  display:flex;justify-content:space-between;
+  font-size:8px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--dimmer);margin-top:8px;
+}
+
+.dfoot{
+  padding:13px 18px;border-top:1px solid var(--rule);flex-shrink:0;
+  font-size:9px;color:var(--dimmer);line-height:1.75;letter-spacing:.05em;
+}
+
+@media (max-width:640px){
+  .gauges{order:-1;width:100%;justify-content:center}
+  .g{min-width:0;padding:0 13px}
+  footer{gap:16px;padding-bottom:22px}
+  .orb{width:min(44vh,84vw)}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.01ms!important;transition-duration:.01ms!important}
+  /* The blink is decorative, so honouring the preference is right -- but the
+     clamp freezes it on the keyframe's dim end and the dots all but vanish.
+     Hold a readable steady state instead. */
+  .twinkle i{opacity:.30!important}
+}
+</style>
+</head>
+<body>
+
+<div class="twinkle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+
+<div class="shell" id="shell" data-state="idle">
+
+  <div class="stub" id="stub">Placeholder scorer active &mdash; not a detector. Do not present these numbers.</div>
+  <div class="stub demo" id="demobar">Static demo &mdash; no analysis backend attached. Log entries below are samples, not measurements.</div>
+
+  <header>
+    <div class="mark">Satya<em>Vaani</em><span class="dev">SIH26104</span></div>
+    <div class="conn"><span class="dot" id="dot"></span><span id="connlabel">standby</span></div>
+    <button class="burger" id="burger" aria-expanded="false" aria-label="Open analysis log">
+      <span></span><span></span><span></span>
+      <i class="count" id="count" hidden>0</i>
+    </button>
+  </header>
+
+  <main class="stage">
+    <div class="orb">
+      <div class="halo"></div>
+      <canvas id="gl"></canvas>
+      <div class="ring"></div>
+      <div class="ring b"></div>
+      <div class="readout">
+        <div class="kicker" id="kicker">Standby</div>
+        <div class="action" id="action">Press record to begin</div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <button class="rec" id="rec"><span class="led"></span><span id="reclabel">Record</span></button>
+    <div class="gauges">
+      <div class="g"><div class="k">P(genuine)</div><div class="v tint" id="gScore">&mdash;&mdash;</div></div>
+      <div class="g"><div class="k">Latency</div><div class="v" id="gMs">&mdash;</div></div>
+      <div class="g"><div class="k">Model</div><div class="v" id="gModel">&mdash;</div></div>
+    </div>
+  </footer>
+
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="dhead">
+    <h2>Analysis log</h2>
+    <span class="n" id="dcount">0 sessions</span>
+    <button class="dclose" id="dclose" aria-label="Close analysis log">&#10005;</button>
+  </div>
+  <div class="evalcard" id="evalcard"></div>
+
+  <div class="dbody" id="dbody">
+    <div class="empty" id="empty">
+      No sessions yet.<br>Record a clip and the result lands here.
+    </div>
+  </div>
+  <div class="dfoot">
+    Scores are P(genuine) from a 2&nbsp;s sliding window. Every session reports the
+    median window, its evidence map, and the measured compute time. This is
+    decision support, not proof of identity.
+  </div>
+</aside>
+
+<script>
+"use strict";
+
+/* ====================================================================== gl
+   Two fragment shaders on one fullscreen triangle. `wave` is the idle and
+   listening state, `dots` is processing. No library: this is the same raw
+   WebGL the shaders shipped with, so the page stays a single file with no
+   build step. */
+
+const VERT = `attribute vec2 aPos; void main(){ gl_Position=vec4(aPos,0.0,1.0); }`;
+
+/* Voice-reactive edit of the Siri wave. Three consts became uniforms:
+     uDrift    - phase, accumulated in JS so changing speed never jumps
+     uLevel    - audio energy, drives amplitude/aberration/thickness
+     uResolved - 0 collapses to a dot, 1 is the full waveform  */
+const WAVE = `precision highp float;
+uniform vec2 iResolution; uniform float iTime;
+uniform float uDrift; uniform float uLevel; uniform float uResolved;
+const float PI = 3.14159265359;
+const float AMPLITUDE=0.32; const float FREQ=1.1; const float ABER_FREQ=1.0;
+const float WAVE_SCALE=0.6; const float ABERRATION=2.6; const float THICKNESS=3.0;
+const float INTENSITY=2.0; const float FALLOFF=1.7; const float EDGE_MASK=0.4;
+const float EDGE_INSET=0.0; const float BAND_FILL=30000.0; const float BAND_THICK=0.08;
+const float SOFTNESS=2.5; const float LOW_AMP=6.0; const float LOW_INT=1.5;
+const float MID_ABER=0.8; const float MID_ABAMP=0.05; const float MID_SOFT=0.4;
+const float HIGH_ABER=0.5; const float HIGH_ABAMP=0.06; const float UNRES_SCALE=0.14;
+
+vec3 spectral4(int s){
+  float x = float(s);
+  return clamp(vec3(abs(x-3.0)-1.0, 2.0-abs(x-2.0), 2.0-abs(x-4.0)), 0.0, 1.0);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord){
+  vec2 R = iResolution.xy;
+  float aspect = R.x / R.y;
+  vec2 p = (fragCoord + 0.5) * 2.0 / R - 1.0;
+  p.x *= aspect;
+  float yScreen = p.y;
+  p /= max(WAVE_SCALE, 0.1);
+
+  float t = iTime;
+  /* bands follow the real signal, with a little idle wobble so a silent
+     room still breathes instead of flatlining */
+  float low  = clamp(uLevel*0.95 + 0.10*sin(t*0.80)*sin(t*0.37+1.0), 0.0, 1.0);
+  float mid  = clamp(uLevel*0.80 + 0.09*sin(t*1.70+2.0)*sin(t*0.53),  0.0, 1.0);
+  float high = clamp(uLevel*0.60 + 0.07*sin(t*2.90+4.0)*sin(t*0.71+2.0), 0.0, 1.0);
+
+  float res   = clamp(uResolved, 0.0, 1.0);
+  float drift = uDrift;
+
+  float xN  = p.x / max(aspect, 1.0);
+  float env = cos(PI*0.5 * min(abs(0.9*xN), 1.0));
+  env *= env;
+
+  float A1    = AMPLITUDE + 0.01*low*LOW_AMP;
+  float A2    = A1 + mid*MID_ABAMP + high*HIGH_ABAMP;
+  float AB    = (ABERRATION + mid*MID_ABER + high*HIGH_ABER)*res;
+  float th    = mix(0.1, 0.01*THICKNESS, res);
+  float inten = mix(0.1, 0.01*(INTENSITY + low*LOW_INT), res);
+  float soft  = 0.01*res*max(0.0, SOFTNESS + mid*MID_SOFT);
+
+  float dUnres = max(length(p) - mix(0.14, UNRES_SCALE, res), 0.0);
+  float yMain  = A1 * env * res * sin(p.x*FREQ + drift);
+
+  float bandFillTh = max(BAND_THICK, 1e-4);
+  float bandAmt    = 1e-4 * BAND_FILL * inten;
+  vec3 num = vec3(0.0), den = vec3(0.0);
+  for(int s = 0; s < 4; s++){
+    vec3 hue = mix(vec3(1.0), spectral4(s), res);
+    den += hue;
+    float ab = mix(-AB, AB, float(s)/3.0);
+    float yL = A2 * env * res * sin(p.x*ABER_FREQ + drift + ab);
+    float d   = mix(dUnres, abs(p.y - yL), res);
+    float lor = mix(1.0/(1.0 + (0.02*d)*(0.02*d)), 1.0, res);
+    float line = inten / (sqrt(d*d + soft*soft) + th);
+    float lo = min(yMain, yL), hi = max(yMain, yL);
+    float dBand = max(0.0, max(p.y - hi, lo - p.y));
+    float band  = bandAmt / (dBand + bandFillTh);
+    num += hue * lor * (line + band);
+  }
+  vec3 col = num / den;
+
+  float dM    = mix(dUnres, abs(p.y - yMain), res);
+  float lorM  = mix(1.0/(1.0 + (0.02*dM)*(0.02*dM)), 1.0, res);
+  float boost = (1.0 - res) * (14.0*low + 4.0);
+  col += 0.5 * inten * (lorM + boost) / (sqrt(dM*dM + soft*soft) + th);
+
+  col = pow(max(col, 0.0), vec3(1.5));
+  float emT = clamp((abs(yScreen) - 1.0 + EDGE_INSET) / (-max(EDGE_MASK, 1e-4)), 0.0, 1.0);
+  float em  = emT*emT*(3.0 - 2.0*emT);
+  float gauss = exp(-pow(xN*FALLOFF, 2.0));
+  col *= mix(1.0, em*gauss, res);
+  col *= res;
+  fragColor = vec4(col, 1.0);
+}
+void main(){ mainImage(gl_FragColor, gl_FragCoord.xy); }`;
+
+/* Metaball dots that gather and burst -- reads as "working on it". */
+const DOTS = `precision highp float;
+uniform vec2 iResolution; uniform float iTime;
+const float TAU = 6.28318530718;
+const int   N   = 6;
+const float SMOOTH_K=0.08; const float INTENSITY=0.0025; const float FALLOFF_P=1.35;
+const float FADE_START=0.02; const float FADE_END=0.56; const float ABERR=0.005;
+const vec3  SPECTRAL = vec3(0.0, 0.5, 1.0) * ABERR;
+const float HUE_SPEED=0.06; const float COLOR_K=0.5; const float SAT=0.01;
+const float HUE_SPAN=0.667; const float MERGE_PERIOD=6.0; const float STAGGER=0.33;
+const float HOLD=0.0; const float W=4.6; const float L=3.2; const float PIERCE=0.12;
+const float RECOIL=0.035; const float REC_LAG=0.11; const float GATHER_PERIOD=12.0;
+const float GATHER_START=9.2; const float GATHER_HOLD=0.8; const float GATHER_R=0.008;
+const float GATHER_DIM=0.85; const float GATHER_IN=1.8; const float GATHER_IN_L=7.5;
+const float BURST_W=6.5; const float BURST_L=4.0; const float CHARGE_T=0.30;
+const float CHARGE_SHRK=0.18; const float CHARGE_GLOW=0.35; const float FLASH_GAIN=1.2;
+const float FLASH_DECAY=7.0;
+
+float hash11(float n){ return fract(sin(n*127.1 + 311.7)*43758.5453); }
+float settleWL(float tau, float w, float l){
+  if(tau <= 0.0) return 0.0;
+  return 1.0 - exp(-l*tau)*cos(w*tau);
+}
+float settle(float tau){ return settleWL(tau, W, L); }
+float settleCrit(float tau, float l){
+  if(tau <= 0.0) return 0.0;
+  return 1.0 - exp(-l*tau)*(1.0 + l*tau);
+}
+float smin(float a, float b, float k){
+  float h = max(k - abs(a - b), 0.0) / k;
+  return min(a, b) - h*h*k*0.25;
+}
+vec3 hue2rgb(float h){
+  h = fract(h);
+  return vec3(clamp(abs(h*6.0-3.0)-1.0,0.0,1.0),
+              clamp(2.0-abs(h*6.0-2.0),0.0,1.0),
+              clamp(2.0-abs(h*6.0-4.0),0.0,1.0));
+}
+float dotR(float fi, float seed, float t){
+  return 0.036 + 0.010*sin(t*1.3 + seed*TAU) + 0.005*sin(t*2.4 + fi*1.3);
+}
+float dotSD(vec2 p, vec2 pos, float r, float t, float fi, float shapeDamp){
+  vec2 d = p - pos;
+  float sq = 0.075 * (0.5 + 0.5*sin(t*0.9 + fi*2.0)) * shapeDamp;
+  float ca = cos(t*0.35 + fi), sa = sin(t*0.35 + fi);
+  d = mat2(ca,-sa,sa,ca) * d;
+  d *= vec2(1.0+sq, 1.0-sq);
+  return length(d) - r;
+}
+vec3 scene(vec2 p, float t){
+  float k  = floor(t/MERGE_PERIOD);
+  float te = fract(t/MERGE_PERIOD) * MERGE_PERIOD;
+  float tg = mod(t, GATHER_PERIOD);
+  float g  = settleCrit((tg - GATHER_START) * GATHER_IN, GATHER_IN_L)
+           - settleWL(tg - GATHER_START - GATHER_HOLD, BURST_W, BURST_L);
+  float gC = clamp(g, 0.0, 1.0);
+  float tb     = tg - (GATHER_START + GATHER_HOLD);
+  float charge = smoothstep(-CHARGE_T, 0.0, min(tb, 0.0)) * gC;
+  float flash  = tb > 0.0 ? exp(-tb * FLASH_DECAY) : 0.0;
+  float gBright = mix(1.0, GATHER_DIM, gC) * (1.0 + CHARGE_GLOW*charge + FLASH_GAIN*flash);
+  vec3  total3 = vec3(1e5);
+  vec3  cAcc   = vec3(0.0);
+  float wAcc   = 1e-6;
+  for(int i=0; i<N; i++){
+    float fi   = float(i);
+    float seed = hash11(fi);
+    float ang  = fi/float(N)*TAU + t*0.35;
+    vec2  dir  = vec2(cos(ang), sin(ang));
+    float R = 0.17 + 0.010*sin(t*1.0) + 0.007*sin(t*1.3 + seed*TAU);
+    float pairId   = mod(fi, 3.0);
+    float moverLow = mod(k + pairId, 2.0);
+    float isMover  = (fi < 2.5) ? step(moverLow, 0.5) : step(0.5, moverLow);
+    float goStart  = pairId * STAGGER;
+    float retStart = 3.0*STAGGER + HOLD + pairId * STAGGER;
+    float m   = (settle(te - goStart)           - settle(te - retStart))           * isMover;
+    float rec = (settle(te - goStart - REC_LAG) - settle(te - retStart - REC_LAG)) * (1.0 - isMover);
+    float rSelf = mix(dotR(fi, seed, t), 0.036, gC) * (1.0 - CHARGE_SHRK * charge);
+    float fj    = mod(fi + 3.0, 6.0);
+    float rPart = dotR(fj, hash11(fj), t);
+    float deep  = -(R + RECOIL) - PIERCE * rPart;
+    float radial = mix(mix(R, deep, m) + RECOIL * rec, GATHER_R, g);
+    vec2  pos = radial * dir;
+    float sdR = dotSD(p - SPECTRAL.r*dir, pos, rSelf, t, fi, 1.0 - gC);
+    float sdG = dotSD(p - SPECTRAL.g*dir, pos, rSelf, t, fi, 1.0 - gC);
+    float sdB = dotSD(p - SPECTRAL.b*dir, pos, rSelf, t, fi, 1.0 - gC);
+    total3 = vec3(smin(total3.r, sdR, SMOOTH_K),
+                  smin(total3.g, sdG, SMOOTH_K),
+                  smin(total3.b, sdB, SMOOTH_K));
+    vec3 dotCol = mix(vec3(1.0), hue2rgb(fract(fi/float(N) + t*HUE_SPEED)*HUE_SPAN), SAT);
+    float w = exp(-sdG * COLOR_K);
+    cAcc += w * dotCol;
+    wAcc += w;
+  }
+  vec3 sd3   = max(total3, vec3(0.0)) + 1e-4;
+  vec3 core3 = clamp(INTENSITY / pow(sd3, vec3(FALLOFF_P)), 0.0, 1.0);
+  vec3 edge3 = 1.0 - smoothstep(vec3(FADE_START), vec3(FADE_END), sd3);
+  return core3 * edge3 * gBright * (cAcc / wAcc);
+}
+void mainImage(out vec4 fragColor, in vec2 fragCoord){
+  vec2 res = iResolution.xy;
+  vec2 p = (2.0*fragCoord - res) / min(res.x, res.y);
+  float t = iTime;
+  p /= 1.0 + 0.03*sin(t);
+  vec3 col = scene(p, t) * (1.0 + 0.05*sin(t + 1.0));
+  col = min(pow(col, vec3(1.0/1.2)), 1.0);
+  col += (fract(sin(dot(fragCoord, vec2(12.9898,78.233)))*43758.5453) - 0.5)/255.0;
+  fragColor = vec4(col, 1.0);
+}
+void main(){ mainImage(gl_FragColor, gl_FragCoord.xy); }`;
+
+const cv = document.getElementById('gl');
+let gl = null, progs = null, buf = null, glOK = false;
+
+function build(src){
+  const compile = (type, s) => {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, s); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS))
+      throw new Error(gl.getShaderInfoLog(sh) || 'compile failed');
+    return sh;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, src));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+    throw new Error(gl.getProgramInfoLog(p) || 'link failed');
+  return {
+    p,
+    aPos: gl.getAttribLocation(p, 'aPos'),
+    res:  gl.getUniformLocation(p, 'iResolution'),
+    time: gl.getUniformLocation(p, 'iTime'),
+    drift:gl.getUniformLocation(p, 'uDrift'),
+    level:gl.getUniformLocation(p, 'uLevel'),
+    resv: gl.getUniformLocation(p, 'uResolved'),
+  };
+}
+
+try {
+  gl = cv.getContext('webgl', {antialias:true, alpha:false, powerPreference:'high-performance'});
+  if (gl) {
+    progs = { wave: build(WAVE), dots: build(DOTS) };
+    buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+    glOK = true;
+  }
+} catch (e) {
+  console.warn('WebGL unavailable, falling back to 2D:', e);
+  glOK = false;
+}
+
+/* 2D fallback. A demo laptop with a blocked GPU should still show the audio
+   rather than a black square. */
+const ctx2d = glOK ? null : cv.getContext('2d');
+
+let dim = 512;
+function size(){
+  const r = cv.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  dim = Math.max(64, Math.round(Math.min(r.width, r.height) * dpr * (glOK ? 0.8 : 1)));
+  cv.width = dim; cv.height = dim;
+  if (glOK) gl.viewport(0, 0, dim, dim);
+
+  // Park the twinkle mask over the orb. The canvas fills .orb, so its rect is
+  // the orb rect -- no separate lookup, and it follows any layout change.
+  const s = document.documentElement.style;
+  s.setProperty('--orb-x', (r.left + r.width / 2) + 'px');
+  s.setProperty('--orb-y', (r.top + r.height / 2) + 'px');
+  s.setProperty('--orb-in', (r.width * 0.44) + 'px');
+  s.setProperty('--orb-out', (r.width * 0.82) + 'px');
+}
+addEventListener('resize', size);
+
+/* ==================================================================== state */
+
+const BAND_RGB = {
+  low:[0x3D,0xDC,0x97], medium:[0xE8,0xB8,0x4B],
+  high:[0xFF,0x5F,0x56], none:[0x3A,0x52,0x57],
+};
+
+const el = id => document.getElementById(id);
+const shell = el('shell');
+
+let state    = 'idle';        // idle | listening | processing | result
+let latest   = null;          // newest /verdict payload
+let lastSeq  = -1;
+let session  = [];            // windows collected during the current recording
+let history  = [];            // finished sessions, newest first
+let connected = false;
+let everConnected = false, demoMode = false;
+
+/* Shown ONLY when no backend ever answered -- i.e. the static GitHub Pages
+   copy, where there is no Python to score anything. Marked demo:true so every
+   card carries a SAMPLE tag, and the page carries a banner. A running
+   server.py never seeds these, so the real demo never shows a fake entry.
+   No evidence maps here on purpose: a Grad-CAM nobody computed is not
+   something to put on screen, labelled or not. */
+const SAMPLES = [
+  { demo:true, band:'high', score:0.091, ms:51, windows:12, placeholder:false,
+    action:'Strong synthetic indicators -- do not act on this call', agoMin:4,
+    series:[0.14,0.11,0.09,0.08,0.12,0.07,0.06,0.10,0.09,0.13,0.08,0.09] },
+  { demo:true, band:'low', score:0.871, ms:46, windows:9, placeholder:false,
+    action:'No indicators detected', agoMin:11,
+    series:[0.82,0.86,0.90,0.88,0.85,0.91,0.87,0.89,0.86] },
+];
+
+function enterDemo(){
+  demoMode = true;
+  el('demobar').classList.add('on');
+  SAMPLES.forEach(s => history.push(
+    Object.assign({}, s, {at:new Date(Date.now() - s.agoMin*60000), heat:null})));
+  setAction('Static demo — press record to see the states', 'none');
+  renderLog();
+}
+
+let level = 0, levelT = 0;    // eased audio energy
+let resolved = 0.12, resolvedT = 0.12;
+let drift = 0, tPrev = performance.now();
+
+const root = document.documentElement;
+let energyWritten = -1;       // last --energy pushed to CSS
+
+function setState(s){
+  state = s;
+  shell.dataset.state = s;
+  const rec = el('rec'), lab = el('reclabel'), kick = el('kicker');
+  rec.disabled = (s === 'processing');
+  lab.textContent = s === 'listening' ? 'Stop' : 'Record';
+  kick.textContent = {
+    idle:'Standby', listening:'Listening', processing:'Analysing', result:'Verdict',
+  }[s];
+  resolvedT = (s === 'listening') ? 1.0 : (s === 'processing' ? 0.0 : 0.18);
+}
+
+function setAction(text, band){
+  const a = el('action');
+  if (a.textContent === text) return;
+  a.classList.add('swap');
+  setTimeout(() => { a.textContent = text; a.classList.remove('swap'); }, 200);
+  if (band) document.documentElement.style
+    .setProperty('--live', `rgb(${BAND_RGB[band] ? BAND_RGB[band].join(',') : BAND_RGB.none.join(',')})`);
+}
+
+/* ==================================================================== frame */
+
+function frame(){
+  const now = performance.now();
+  const dt = Math.min((now - tPrev) / 1000, 0.05);
+  tPrev = now;
+  const t = now / 1000;
+
+  // With no backend there is no envelope to react to, so the static demo
+  // drives the wave from a synthetic level. The page says so in a banner.
+  if (demoMode && state === 'listening'){
+    levelT = Math.max(0, 0.42 + 0.34*Math.sin(t*2.3) + 0.16*Math.sin(t*7.1 + 1.3));
+  }
+
+  // ease toward targets so nothing snaps
+  level    += (levelT - level) * Math.min(dt * 7, 1);
+  resolved += (resolvedT - resolved) * Math.min(dt * 3.4, 1);
+
+  // Halo and dot glow read this. Only written when it actually moves -- a
+  // custom-property write every frame is a style recalc nobody needs.
+  if (Math.abs(level - energyWritten) > 0.008){
+    energyWritten = level;
+    root.style.setProperty('--energy', level.toFixed(3));
+  }
+
+  // Idle drifts slowly; a loud voice runs it several times faster. Phase is
+  // accumulated here so a speed change never jumps the waveform.
+  drift += dt * (0.55 + level * 7.5) * (state === 'listening' ? 1.0 : 0.45);
+
+  if (glOK) {
+    const P = (state === 'processing') ? progs.dots : progs.wave;
+    gl.useProgram(P.p);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.enableVertexAttribArray(P.aPos);
+    gl.vertexAttribPointer(P.aPos, 2, gl.FLOAT, false, 0, 0);
+    gl.uniform2f(P.res, dim, dim);
+    gl.uniform1f(P.time, t);
+    if (P.drift) gl.uniform1f(P.drift, drift);
+    if (P.level) gl.uniform1f(P.level, level);
+    if (P.resv)  gl.uniform1f(P.resv, resolved);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  } else if (ctx2d) {
+    drawFallback(t);
+  }
+  requestAnimationFrame(frame);
+}
+
+function drawFallback(t){
+  const w = cv.width, h = cv.height, mid = h/2;
+  ctx2d.clearRect(0,0,w,h);
+  const wave = (latest && latest.wave) || [];
+  const col = getComputedStyle(document.documentElement).getPropertyValue('--live').trim() || '#3A5257';
+  ctx2d.strokeStyle = col; ctx2d.lineWidth = Math.max(1.5, w/300);
+  ctx2d.beginPath();
+  const n = Math.max(wave.length, 2);
+  for (let i = 0; i < n; i++){
+    const v = (wave[i] || 0) * resolved * Math.sin(i*0.5 + drift) ;
+    const x = i/(n-1)*w, y = mid - v*mid*0.9;
+    i ? ctx2d.lineTo(x,y) : ctx2d.moveTo(x,y);
+  }
+  ctx2d.stroke();
+}
+
+/* ================================================================== polling */
+
+function setConn(ok){
+  if (ok === connected) return;
+  connected = ok;
+  el('dot').classList.toggle('on', ok);
+  el('connlabel').textContent = ok ? 'connected' : 'no signal';
+}
+
+async function poll(){
+  try {
+    const r = await fetch('/verdict', {cache:'no-store'});
+    const d = await r.json();
+    setConn(true);
+    everConnected = true;
+    latest = d;
+
+    el('stub').classList.toggle('on', d.placeholder);
+    el('gModel').textContent = d.placeholder ? 'stub' : 'trained';
+
+    const ms = el('gMs');
+    ms.textContent = d.ms === null ? '—' : d.ms.toFixed(0) + ' ms';
+    ms.classList.toggle('warn', !!d.behind);
+
+    if (d.seq !== lastSeq){
+      lastSeq = d.seq;
+      // envelope -> a single energy number for the shader
+      const wv = d.wave || [];
+      let sum = 0; for (let i=0;i<wv.length;i++) sum += wv[i]*wv[i];
+      const rms = wv.length ? Math.sqrt(sum/wv.length) : 0;
+      levelT = (state === 'listening' || state === 'idle')
+        ? Math.min(rms * 2.6, 1) : 0.12;
+
+      if (state === 'listening'){
+        session.push(d);
+        el('gScore').textContent = d.score === null ? '——' : d.score.toFixed(2);
+        setAction(d.action, d.band);
+      }
+    }
+  } catch (e) {
+    setConn(false);
+    if (!everConnected && !demoMode) enterDemo();
+    if (!demoMode) levelT = 0;
+  }
+  setTimeout(poll, 150);
+}
+
+/* ================================================================== session */
+
+el('rec').addEventListener('click', () => {
+  if (state === 'listening') return finish();
+  session = [];
+  el('gScore').textContent = '——';
+  setAction('Listening for speech…', 'none');
+  setState('listening');
+});
+
+function finish(){
+  setState('processing');
+  levelT = 0.12;
+  const startedAt = Date.now();
+
+  // Wait for the next window to land so "analysing" covers real work, not a
+  // fake timer -- then fall through after 1.4 s if the stream has stalled.
+  const seqAt = lastSeq;
+  const done = () => {
+    clearInterval(iv); clearTimeout(to);
+    commit();
+  };
+  const iv = setInterval(() => { if (lastSeq !== seqAt) done(); }, 60);
+  const to = setTimeout(done, 1400);
+
+  function commit(){
+    const scored = session.filter(d => d.score !== null);
+    let entry;
+    if (demoMode){
+      // cycle the samples, so both bands are reachable from the demo page
+      const n = history.filter(h => h.demo).length;
+      entry = Object.assign({}, SAMPLES[n % SAMPLES.length], {heat:null});
+    } else if (!scored.length){
+      entry = {
+        score:null, band:'none',
+        action:'Insufficient audio — keep speaking',
+        ms:null, heat:null, windows:session.length,
+        placeholder: latest ? latest.placeholder : true,
+      };
+    } else {
+      // Report the median WINDOW verbatim -- band and action come from the
+      // server, so the score->band thresholds live in exactly one place.
+      const sorted = scored.slice().sort((a,b) => a.score - b.score);
+      const med = sorted[Math.floor(sorted.length/2)];
+      entry = {
+        score:med.score, band:med.band, action:med.action, ms:med.ms,
+        heat:med.heat, windows:scored.length, placeholder:med.placeholder,
+      };
+    }
+    entry.at = new Date();
+    entry.took = ((Date.now() - startedAt)/1000).toFixed(1);
+    // every window in order, nulls kept so a refusal shows as a gap.
+    // Skipped in demo mode -- session is empty there and would wipe the
+    // sample's own series.
+    if (!demoMode) entry.series = session.map(d => d.score);
+    history.unshift(entry);
+    if (history.length > 40) history.pop();
+
+    el('gScore').textContent = entry.score === null ? '——' : entry.score.toFixed(2);
+    setAction(entry.action, entry.band);
+    setState('result');
+    renderLog();
+  }
+}
+
+/* ==================================================================== drawer */
+
+const drawer = el('drawer'), scrim = el('scrim'), burger = el('burger');
+function toggleDrawer(open){
+  const on = open === undefined ? !drawer.classList.contains('on') : open;
+  drawer.classList.toggle('on', on);
+  scrim.classList.toggle('on', on);
+  drawer.setAttribute('aria-hidden', String(!on));
+  burger.setAttribute('aria-expanded', String(on));
+}
+burger.addEventListener('click', () => toggleDrawer());
+scrim.addEventListener('click', () => toggleDrawer(false));
+el('dclose').addEventListener('click', () => toggleDrawer(false));
+addEventListener('keydown', e => { if (e.key === 'Escape') toggleDrawer(false); });
+
+const HEAT_W = 64, HEAT_H = 24;
+
+/* Measured eval numbers, written by train.report(). Null means nobody has run
+   it against this checkpoint -- which the card says out loud rather than
+   showing a plausible-looking number that nothing produced. */
+let METRICS = null;
+const pct = v => (v * 100).toFixed(1) + '%';
+
+function renderEval(){
+  const box = el('evalcard');
+  if (!METRICS){
+    box.innerHTML =
+      '<div class="h">Model evaluation</div>' +
+      '<div class="none">No evaluation on record for this checkpoint.<br>' +
+      'Run <code>train.report()</code> — it writes the numbers here.</div>';
+    return;
+  }
+  const m = METRICS;
+  const unseenKnown = m.eer_unseen !== null && m.eer_unseen !== undefined;
+  box.innerHTML =
+    '<div class="h">Model evaluation' +
+      `<span>measured ${(m.measured_at || '').replace('T', ' ')}</span></div>` +
+    '<div class="split">' +
+      '<div class="sp"><div class="lab">Seen attacks</div>' +
+        `<div class="big">${pct(m.eer_seen)}</div>` +
+        `<div class="sub">EER · ${m.n_seen} clips</div></div>` +
+      '<div class="sp"><div class="lab">Held-out engine</div>' +
+        (unseenKnown
+          ? `<div class="big">${pct(m.eer_unseen)}</div><div class="sub">EER · ${m.n_unseen} clips</div>`
+          : '<div class="big miss">NOT MEASURED</div><div class="sub">no held-out generator yet</div>') +
+      '</div>' +
+    '</div>' +
+    '<div class="sub" style="margin-top:10px">' +
+      `threshold ${m.threshold.toFixed(3)} at a ${pct(m.far_budget)} false-alarm budget · ` +
+      `detection ${pct(m.detection_seen)}` +
+      (unseenKnown ? ` · held-out detection ${pct(m.detection_unseen)} at the same threshold` : '') +
+    '</div>';
+}
+
+fetch('/metrics', {cache:'no-store'})
+  .then(r => r.json())
+  .then(m => { METRICS = m; renderEval(); renderLog(); })
+  .catch(() => renderEval());
+
+/* Score trace for one session. The band cutoffs and the calibrated operating
+   threshold are drawn together on purpose -- when they disagree, you can see
+   it here instead of finding out on stage. */
+function paintTrace(canvas, series, rgb){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const r = canvas.getBoundingClientRect();
+  const w = Math.max(1, r.width * dpr), h = Math.max(1, r.height * dpr);
+  canvas.width = w; canvas.height = h;
+  const x = canvas.getContext('2d');
+  const pad = 5 * dpr;
+  const yOf = v => h - pad - v * (h - pad*2);
+
+  // band boundaries from satyavaani.BANDS
+  x.strokeStyle = 'rgba(255,255,255,.11)'; x.lineWidth = 1 * dpr;
+  [0.33, 0.66].forEach(v => {
+    x.beginPath(); x.moveTo(0, yOf(v)); x.lineTo(w, yOf(v)); x.stroke();
+  });
+
+  // calibrated operating threshold, if a report() has been run
+  if (METRICS && typeof METRICS.threshold === 'number'){
+    x.save();
+    x.setLineDash([4*dpr, 4*dpr]);
+    x.strokeStyle = 'rgba(232,184,75,.75)'; x.lineWidth = 1.2 * dpr;
+    x.beginPath();
+    x.moveTo(0, yOf(METRICS.threshold)); x.lineTo(w, yOf(METRICS.threshold));
+    x.stroke();
+    x.restore();
+  }
+
+  const pts = series.map((v, i) => [i, v]).filter(p => p[1] !== null);
+  if (!pts.length) return;
+  const stepX = series.length > 1 ? w / (series.length - 1) : w;
+
+  x.beginPath();
+  pts.forEach(([i, v], k) => {
+    const px = i * stepX, py = yOf(v);
+    k ? x.lineTo(px, py) : x.moveTo(px, py);
+  });
+  x.strokeStyle = `rgb(${rgb.join(',')})`;
+  x.lineWidth = 1.8 * dpr; x.lineJoin = 'round'; x.lineCap = 'round';
+  x.stroke();
+
+  const [li, lv] = pts[pts.length - 1];
+  x.beginPath();
+  x.arc(li * stepX, yOf(lv), 3 * dpr, 0, Math.PI * 2);
+  x.fillStyle = `rgb(${rgb.join(',')})`;
+  x.fill();
+}
+
+function renderLog(){
+  const n = history.length;
+  el('dcount').textContent = n + (n === 1 ? ' session' : ' sessions');
+  const c = el('count');
+  c.hidden = n === 0; c.textContent = n;
+
+  const body = el('dbody');
+  body.innerHTML = '';
+  if (!n){
+    const d = document.createElement('div');
+    d.className = 'empty';
+    d.innerHTML = 'No sessions yet.<br>Record a clip and the result lands here.';
+    body.appendChild(d);
+    return;
+  }
+
+  history.forEach(h => {
+    const rgb = BAND_RGB[h.band] || BAND_RGB.none;
+    const card = document.createElement('div');
+    card.className = 'card';
+
+    const top = document.createElement('div');
+    top.className = 'top';
+    top.innerHTML =
+      `<span class="pip" style="background:rgb(${rgb.join(',')})"></span>` +
+      `<span class="bandname" style="color:rgb(${rgb.join(',')})">${h.band}</span>` +
+      (h.demo ? '<span class="sample">SAMPLE</span>' : '') +
+      `<span class="time">${h.at.toLocaleTimeString()}</span>`;
+    card.appendChild(top);
+
+    const act = document.createElement('div');
+    act.className = 'act';
+    act.textContent = h.action;
+    card.appendChild(act);
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.innerHTML =
+      `<span>P(genuine) <b>${h.score === null ? '—' : h.score.toFixed(3)}</b></span>` +
+      `<span>windows <b>${h.windows}</b></span>` +
+      `<span>compute <b>${h.ms === null ? '—' : h.ms.toFixed(0) + ' ms'}</b></span>` +
+      `<span>model <b>${h.demo ? 'sample' : (h.placeholder ? 'stub' : 'trained')}</b></span>`;
+    card.appendChild(meta);
+
+    if (h.series && h.series.length > 1){
+      const tc = document.createElement('canvas');
+      tc.className = 'trace';
+      card.appendChild(tc);
+      const tlab = document.createElement('div');
+      tlab.className = 'evlab';
+      tlab.innerHTML = '<span>P(genuine) per window</span><span>' +
+        (METRICS && typeof METRICS.threshold === 'number'
+          ? 'dashed = operating threshold' : 'lines = band cutoffs') + '</span>';
+      card.appendChild(tlab);
+      requestAnimationFrame(() => paintTrace(tc, h.series, rgb));
+    }
+
+    if (h.heat && h.heat.length === HEAT_W * HEAT_H){
+      const hc = document.createElement('canvas');
+      hc.className = 'heat';
+      card.appendChild(hc);
+      const lab = document.createElement('div');
+      lab.className = 'evlab';
+      lab.innerHTML = '<span>Evidence</span><span>low → high freq</span>';
+      card.appendChild(lab);
+      // draw after layout so clientWidth is real
+      requestAnimationFrame(() => paintHeat(hc, h.heat, rgb));
+    }
+
+    body.appendChild(card);
+  });
+}
+
+function paintHeat(canvas, flat, rgb){
+  const off = document.createElement('canvas');
+  off.width = HEAT_W; off.height = HEAT_H;
+  const ox = off.getContext('2d');
+  const img = ox.createImageData(HEAT_W, HEAT_H);
+  for (let i = 0; i < flat.length; i++){
+    const v = flat[i]/255, j = i*4;
+    img.data[j] = rgb[0]*v; img.data[j+1] = rgb[1]*v; img.data[j+2] = rgb[2]*v;
+    img.data[j+3] = 255;
+  }
+  ox.putImageData(img, 0, 0);
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const r = canvas.getBoundingClientRect();
+  canvas.width = Math.max(1, r.width * dpr);
+  canvas.height = Math.max(1, r.height * dpr);
+  const cx = canvas.getContext('2d');
+  cx.imageSmoothingEnabled = true;
+  // mel runs low->high down the array; flip so high frequency sits on top
+  cx.save(); cx.translate(0, canvas.height); cx.scale(1, -1);
+  cx.drawImage(off, 0, 0, canvas.width, canvas.height);
+  cx.restore();
+}
+
+/* ======================================================================= go */
+size();
+setState('idle');
+renderEval();
+renderLog();
+requestAnimationFrame(frame);
+poll();
+</script>
+</body>
+</html>

@@ -81,19 +81,46 @@ def run_audio(source, scorer):
             )
 
 
+METRICS_JSON = "satyavaani.metrics.json"
+
+
+def read_metrics():
+    """Measured eval numbers from train.report(), or None if never run.
+
+    None is a real answer and the UI says so. The alternative -- a developer
+    typing an accuracy into the page -- looks identical to a measured one and
+    survives right up to the question "which generators produced that?".
+    """
+    p = Path(__file__).parent / METRICS_JSON
+    try:
+        with open(p) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
 class Handler(SimpleHTTPRequestHandler):
+    def _json(self, obj):
+        body = json.dumps(obj).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         if self.path.startswith("/verdict"):
             with _lock:
-                body = json.dumps(_state).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+                snapshot = dict(_state)
+            self._json(snapshot)
             return
-        self.path = "/ui.html" if self.path in ("/", "") else self.path
+        if self.path.startswith("/metrics"):
+            # re-read per request, so re-running report() shows up on refresh
+            self._json(read_metrics())
+            return
+        # index.html, so SimpleHTTPRequestHandler serves "/" with no special
+        # case here and GitHub Pages can host the same file unchanged.
         return super().do_GET()
 
     def log_message(self, *a):

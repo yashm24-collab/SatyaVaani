@@ -36,7 +36,7 @@ band-limited and trivially separable. It proves wiring, not detection.
 | `satyavaani.py` | shared, **frozen** | features, `verdict()`, bands, EER. Change only by agreement. |
 | `mic.py` | person 3 | `Mic` / `FileMic` -> `.start() .get() .stop()` |
 | `requirements.txt` | shared | numpy runs everything; torch only for persons 1+2 |
-| `server.py` + `ui.html` | person 4 | stdlib HTTP server + signal-analyser UI |
+| `server.py` + `index.html` | person 4 | stdlib HTTP server + signal-analyser UI |
 | `train.py` | persons 1+2 | CNN, training, seen/unseen eval, writes `satyavaani.pt` |
 
 ## The interface — frozen, do not renegotiate

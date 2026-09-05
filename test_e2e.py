@@ -120,7 +120,10 @@ def main():
     net = train.fit(train.SpoofCNN(), splits["train"], epochs=6)
 
     print("3/6 eval (asserts live here)")
-    e_seen, thr, det = train.report(net, splits)
+    # out=None: this trains on trivially separable synthetic audio, so its
+    # EER of 0.000 is meaningless. Writing it to the metrics sidecar would put
+    # that number straight into the UI's evaluation card.
+    e_seen, thr, det = train.report(net, splits, out=None)
 
     print("4/6 saving checkpoint")
     torch.save(net.state_dict(), CKPT)

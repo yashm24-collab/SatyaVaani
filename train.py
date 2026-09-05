@@ -316,8 +316,18 @@ def collect(net, rows, bs=64):
     return np.array(scores), np.array(labels)
 
 
-def report(net, splits, far_budget=FAR_BUDGET):
-    """The one runnable check. Seen and unseen, always together."""
+METRICS_JSON = "satyavaani.metrics.json"
+
+
+def report(net, splits, far_budget=FAR_BUDGET, out=METRICS_JSON):
+    """The one runnable check. Seen and unseen, always together.
+
+    Writes the numbers to `out` so the UI can display measured values instead
+    of a developer retyping them into HTML. A hand-typed accuracy on a screen
+    is indistinguishable from a real one right up until a judge asks which
+    generators produced it. `unseen` stays null until it has actually been
+    measured -- the UI renders that as NOT MEASURED, never as a blank or a 0.
+    """
     s_seen, y_seen = collect(net, splits["seen"])
     e_seen = eer(s_seen, y_seen)
 
@@ -330,11 +340,18 @@ def report(net, splits, far_budget=FAR_BUDGET):
     print(f"threshold @ {far_budget:.0%} FA    {thr:.3f}")
     print(f"detection at thr    {det:.3f}   (false alarms {far:.3f})")
 
+    m = {"eer_seen": e_seen, "far_budget": far_budget, "threshold": thr,
+         "detection_seen": det, "false_alarm_seen": far,
+         "eer_unseen": None, "detection_unseen": None,
+         "n_seen": int(len(y_seen)), "n_unseen": 0}
+
     if splits["unseen"]:
         s_un, y_un = collect(net, splits["unseen"])
+        e_un = eer(s_un, y_un)
         det_un = detection_rate(s_un, y_un, thr)     # same threshold, honest
-        print(f"EER unseen          {eer(s_un, y_un):.3f}   <-- the headline")
+        print(f"EER unseen          {e_un:.3f}   <-- the headline")
         print(f"detection unseen    {det_un:.3f}   (same threshold)")
+        m.update(eer_unseen=e_un, detection_unseen=det_un, n_unseen=int(len(y_un)))
     else:
         print("EER unseen          MISSING - person 5 has not delivered yet")
 
@@ -342,6 +359,18 @@ def report(net, splits, far_budget=FAR_BUDGET):
     assert det >= 0.50, f"detection {det:.3f} at the FA budget - not worth shipping"
     # No assert on unseen, on purpose: it is the number we are trying to move,
     # and a failing assert only tempts someone to quietly relax it.
+
+    # Written only after the asserts pass. A failing run leaves no metrics file,
+    # so the UI says "no evaluation on record" rather than showing numbers from
+    # a model that was rejected.
+    if out:
+        import datetime
+        import json
+        m["measured_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+        with open(out, "w") as f:
+            json.dump(m, f, indent=2)
+        print(f"wrote {out}")
+
     return e_seen, thr, det
 
 
