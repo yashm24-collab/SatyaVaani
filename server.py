@@ -116,8 +116,20 @@ class Handler(SimpleHTTPRequestHandler):
             self._json(snapshot)
             return
         if self.path.startswith("/metrics"):
-            # re-read per request, so re-running report() shows up on refresh
-            self._json(read_metrics())
+            # `config` is the pipeline's own constants, so the UI draws the
+            # real band cutoffs instead of a second copy that can drift.
+            # `eval` re-read per request, so re-running report() shows up on
+            # refresh without restarting the server.
+            self._json({
+                "config": {
+                    "sr": sv.SR, "window_s": sv.WINDOW_S, "hop_s": sv.HOP_S,
+                    "n_mels": sv.N_MELS, "frames": sv.FRAMES,
+                    "min_speech_s": sv.MIN_SPEECH_S, "min_rms": sv.MIN_RMS,
+                    "hop_budget_ms": HOP_MS,
+                    "bands": [[lo, name] for lo, name, _ in sv.BANDS],
+                },
+                "eval": read_metrics(),
+            })
             return
         # index.html, so SimpleHTTPRequestHandler serves "/" with no special
         # case here and GitHub Pages can host the same file unchanged.

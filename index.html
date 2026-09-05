@@ -381,6 +381,33 @@ footer{
   display:block;width:100%;height:64px;margin-top:11px;
   border:1px solid var(--rule);border-radius:8px;background:#08080B;
 }
+/* Progressive disclosure: the action string stays the headline (REQ-3) and
+   the numbers live one click away, for the investigator in PRD 02 rather than
+   the person mid-call. <details> handles the toggle natively. */
+.nerd{margin-top:12px;border-top:1px solid var(--rule);padding-top:10px}
+.nerd summary{
+  cursor:pointer;list-style:none;display:flex;align-items:center;gap:7px;
+  font-size:8.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--dimmer);
+  transition:color .2s;
+}
+.nerd summary::-webkit-details-marker{display:none}
+.nerd summary::before{content:"+";font-size:12px;line-height:1;width:8px;text-align:center}
+.nerd[open] summary::before{content:"\2212"}
+.nerd summary:hover{color:var(--dim)}
+.rows{
+  display:grid;grid-template-columns:1fr auto;gap:4px 14px;
+  margin-top:11px;font-size:9.5px;
+}
+.rows span{color:var(--dimmer);letter-spacing:.05em}
+.rows em{font-style:normal;color:#A9A9B8;font-variant-numeric:tabular-nums}
+.rows em.flag{color:var(--medium)}
+.rows b.sec{
+  grid-column:1/-1;font-size:8px;font-weight:700;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--dimmer);opacity:.75;
+  margin-top:9px;padding-top:8px;border-top:1px solid var(--rule);
+}
+.rows b.sec:first-child{margin-top:0;padding-top:0;border-top:0}
+
 .card .evlab{
   display:flex;justify-content:space-between;
   font-size:8px;letter-spacing:.18em;text-transform:uppercase;
@@ -768,10 +795,14 @@ let everConnected = false, demoMode = false;
 const SAMPLES = [
   { demo:true, band:'high', score:0.091, ms:51, windows:12, placeholder:false,
     action:'Strong synthetic indicators -- do not act on this call', agoMin:4,
-    series:[0.14,0.11,0.09,0.08,0.12,0.07,0.06,0.10,0.09,0.13,0.08,0.09] },
+    series:[0.14,0.11,0.09,0.08,0.12,0.07,0.06,0.10,0.09,0.13,0.08,0.09],
+    stats:{windows:13,refused:1,min:0.06,med:0.09,max:0.14,msMed:51,msMax:74,
+           behind:false,tookS:'6.4'} },
   { demo:true, band:'low', score:0.871, ms:46, windows:9, placeholder:false,
     action:'No indicators detected', agoMin:11,
-    series:[0.82,0.86,0.90,0.88,0.85,0.91,0.87,0.89,0.86] },
+    series:[0.82,0.86,0.90,0.88,0.85,0.91,0.87,0.89,0.86],
+    stats:{windows:9,refused:0,min:0.82,med:0.87,max:0.91,msMed:46,msMax:63,
+           behind:false,tookS:'4.8'} },
 ];
 
 function enterDemo(){
@@ -974,8 +1005,25 @@ function finish(){
     entry.took = ((Date.now() - startedAt)/1000).toFixed(1);
     // every window in order, nulls kept so a refusal shows as a gap.
     // Skipped in demo mode -- session is empty there and would wipe the
-    // sample's own series.
-    if (!demoMode) entry.series = session.map(d => d.score);
+    // sample's own series and stats.
+    if (!demoMode){
+      entry.series = session.map(d => d.score);
+      const ss  = scored.map(d => d.score).sort((a, b) => a - b);
+      const mss = session.map(d => d.ms).filter(v => typeof v === 'number')
+                         .sort((a, b) => a - b);
+      const mid = a => a.length ? a[Math.floor(a.length / 2)] : null;
+      entry.stats = {
+        windows: session.length,
+        refused: session.length - scored.length,
+        min: ss.length ? ss[0] : null,
+        med: mid(ss),
+        max: ss.length ? ss[ss.length - 1] : null,
+        msMed: mid(mss),
+        msMax: mss.length ? mss[mss.length - 1] : null,
+        behind: session.some(d => d.behind),
+        tookS: entry.took,
+      };
+    }
     history.unshift(entry);
     if (history.length > 40) history.pop();
 
@@ -1007,6 +1055,10 @@ const HEAT_W = 64, HEAT_H = 24;
    it against this checkpoint -- which the card says out loud rather than
    showing a plausible-looking number that nothing produced. */
 let METRICS = null;
+/* Pipeline constants straight from satyavaani.py -- band cutoffs, window and
+   hop, the REQ-6 guards. Fetched rather than retyped, so the numbers the UI
+   draws cannot drift from the ones the model actually uses. */
+let CONFIG = null;
 const pct = v => (v * 100).toFixed(1) + '%';
 
 function renderEval(){
@@ -1042,7 +1094,11 @@ function renderEval(){
 
 fetch('/metrics', {cache:'no-store'})
   .then(r => r.json())
-  .then(m => { METRICS = m; renderEval(); renderLog(); })
+  .then(d => {
+    CONFIG = (d && d.config) || null;
+    METRICS = (d && d.eval) || null;
+    renderEval(); renderLog();
+  })
   .catch(() => renderEval());
 
 /* Score trace for one session. The band cutoffs and the calibrated operating
@@ -1057,9 +1113,11 @@ function paintTrace(canvas, series, rgb){
   const pad = 5 * dpr;
   const yOf = v => h - pad - v * (h - pad*2);
 
-  // band boundaries from satyavaani.BANDS
+  // real band boundaries from satyavaani.BANDS, via /metrics
+  const cuts = (CONFIG && CONFIG.bands ? CONFIG.bands.map(b => b[0]) : [0.33, 0.66])
+    .filter(v => v > 0 && v < 1);
   x.strokeStyle = 'rgba(255,255,255,.11)'; x.lineWidth = 1 * dpr;
-  [0.33, 0.66].forEach(v => {
+  cuts.forEach(v => {
     x.beginPath(); x.moveTo(0, yOf(v)); x.lineTo(w, yOf(v)); x.stroke();
   });
 
@@ -1163,8 +1221,67 @@ function renderLog(){
       requestAnimationFrame(() => paintHeat(hc, h.heat, rgb));
     }
 
+    if (h.stats){
+      const det = document.createElement('details');
+      det.className = 'nerd';
+      det.innerHTML = '<summary>Stats for nerds</summary>' + nerdRows(h);
+      card.appendChild(det);
+    }
+
     body.appendChild(card);
   });
+}
+
+/* Everything measured about one session, plus the constants that produced it.
+   Nothing here is retyped: the pipeline numbers come from /metrics, the rest
+   is computed from the windows actually collected. */
+function nerdRows(h){
+  const s = h.stats, out = [];
+  const row = (k, v, flag) =>
+    out.push(`<span>${k}</span><em${flag ? ' class="flag"' : ''}>${v}</em>`);
+  const sec = t => out.push(`<b class="sec">${t}</b>`);
+  const n3 = v => (v === null || v === undefined) ? '—' : (+v).toFixed(3);
+  const ms = v => (v === null || v === undefined) ? '—' : v.toFixed(0) + ' ms';
+
+  sec('Session');
+  row('windows scored', s.windows - s.refused);
+  row('windows refused (REQ-6)', s.refused, s.refused > 0);
+  row('wall time', s.tookS + ' s');
+
+  sec('Score distribution');
+  row('min', n3(s.min));
+  row('median', n3(s.med));
+  row('max', n3(s.max));
+  row('spread', s.min === null ? '—' : n3(s.max - s.min));
+
+  sec('Compute');
+  row('median', ms(s.msMed));
+  row('max', ms(s.msMax));
+  if (CONFIG) row('hop budget', ms(CONFIG.hop_budget_ms));
+  row('exceeded budget', s.behind ? 'yes' : 'no', s.behind);
+
+  sec('Decision');
+  row('operating threshold',
+      METRICS ? `${n3(METRICS.threshold)} @ ${pct(METRICS.far_budget)} FA`
+              : 'not calibrated', !METRICS);
+  if (CONFIG && CONFIG.bands)
+    CONFIG.bands.forEach(([lo, name]) => row(`band "${name}"`, `score ≥ ${n3(lo)}`));
+
+  if (CONFIG){
+    sec('Pipeline');
+    row('sample rate', CONFIG.sr + ' Hz');
+    row('window / hop', `${CONFIG.window_s} s / ${CONFIG.hop_s} s`);
+    row('features', `${CONFIG.n_mels} mel × ${CONFIG.frames} frames`);
+    row('min speech (REQ-6)', CONFIG.min_speech_s + ' s');
+    row('min RMS (REQ-6)', CONFIG.min_rms);
+  }
+
+  sec('Model');
+  row('scorer', h.demo ? 'sample — nothing measured'
+      : (h.placeholder ? 'placeholder (not a detector)' : 'trained checkpoint'),
+      h.demo || h.placeholder);
+
+  return '<div class="rows">' + out.join('') + '</div>';
 }
 
 function paintHeat(canvas, flat, rgb){
