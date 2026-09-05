@@ -691,6 +691,10 @@ void main(){ mainImage(gl_FragColor, gl_FragCoord.xy); }`;
    skipped entirely. Raise BUCKETS if the banding shows. */
 const DOT = {
   gap: 10, r: 1.6, sMin: 0.3, sMax: 1.6,
+  // sMin/sMax are multipliers, not rad/s. Unscaled, the slowest dot takes
+  // 21 s per cycle and the field reads as static. x5 puts the range at
+  // 0.8-4.2 s, which is a twinkle.
+  speedScale: 5,
   base: [0x73, 0x73, 0x73],      // neutral-500, the resting dot
   glow: [0xFF, 0xFF, 0xFF],      // white at full pulse
 };
@@ -714,7 +718,7 @@ function buildDots(){
   for (let j = 0, k = 0; j < rows; j++){
     for (let i = 0; i < cols; i++, k++){
       x[k] = i * g; y[k] = j * g;
-      sp[k] = DOT.sMin + Math.random() * (DOT.sMax - DOT.sMin);
+      sp[k] = (DOT.sMin + Math.random() * (DOT.sMax - DOT.sMin)) * DOT.speedScale;
       ph[k] = Math.random() * Math.PI * 2;
     }
   }
