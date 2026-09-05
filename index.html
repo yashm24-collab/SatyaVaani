@@ -38,12 +38,9 @@
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
 body{
-  /* Dot field, pure CSS: one repeating radial-gradient tile. No canvas, no
-     per-dot JS, no cost. The brighter dots near the orb are a second copy of
-     this same grid, masked and lit by the audio level (see .dotfield). */
+  /* No CSS dot grid: the #dots canvas draws the whole field, so a second
+     tiled copy here would double-print at a different pitch. */
   background-color:var(--void);
-  background-image:radial-gradient(circle at center,var(--dot) 1px,transparent 1.4px);
-  background-size:var(--gap) var(--gap);
   color:var(--bone);
   font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
   overflow:hidden;
@@ -175,24 +172,7 @@ header{
   mask-image:radial-gradient(circle at var(--orb-x,50%) var(--orb-y,46%),
     transparent 0,transparent var(--orb-in,210px),#000 var(--orb-out,400px));
 }
-.twinkle i{
-  position:absolute;inset:0;opacity:.06;
-  background-image:radial-gradient(circle at center,
-    rgba(206,222,232,.62) 1px,transparent 1.7px);
-  background-size:calc(var(--gap)*3) calc(var(--gap)*3);
-  animation-name:blink;animation-iteration-count:infinite;
-  animation-timing-function:ease-in-out;
-}
-@keyframes blink{0%,100%{opacity:.05}50%{opacity:.52}}
-/* negative delays so they are already out of phase on the first frame */
-.twinkle i:nth-child(1){background-position:0 0;
-  animation-duration:3.1s;animation-delay:0s}
-.twinkle i:nth-child(2){background-position:calc(var(--gap)*1) calc(var(--gap)*2);
-  animation-duration:4.7s;animation-delay:-1.2s}
-.twinkle i:nth-child(3){background-position:calc(var(--gap)*2) calc(var(--gap)*1);
-  animation-duration:5.9s;animation-delay:-2.5s}
-.twinkle i:nth-child(4){background-position:calc(var(--gap)*1) 0;
-  animation-duration:3.8s;animation-delay:-3.4s}
+.twinkle{width:100%;height:100%;display:block}
 #gl{
   position:absolute;inset:0;width:100%;height:100%;
   /* The shaders paint glow on black. `screen` makes their black transparent,
@@ -427,16 +407,13 @@ footer{
 }
 @media (prefers-reduced-motion:reduce){
   *{animation-duration:.01ms!important;transition-duration:.01ms!important}
-  /* The blink is decorative, so honouring the preference is right -- but the
-     clamp freezes it on the keyframe's dim end and the dots all but vanish.
-     Hold a readable steady state instead. */
-  .twinkle i{opacity:.30!important}
+  /* The dot field freezes itself (see PULSE below); nothing to clamp here. */
 }
 </style>
 </head>
 <body>
 
-<div class="twinkle" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+<canvas class="twinkle" id="dots" aria-hidden="true"></canvas>
 
 <div class="shell" id="shell" data-state="idle">
 
@@ -704,6 +681,80 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord){
 }
 void main(){ mainImage(gl_FragColor, gl_FragCoord.xy); }`;
 
+/* ================================================================ dot field
+   Per-dot speed is the point. CSS can only give one speed per layer, so four
+   layers meant four speeds with every dot inside a layer pulsing in lockstep.
+   This gives each dot its own speed in [sMin, sMax] and its own phase.
+
+   ponytail: alpha is quantised into BUCKETS so the whole field draws in
+   BUCKETS fills instead of one per dot, and dots hidden behind the orb are
+   skipped entirely. Raise BUCKETS if the banding shows. */
+const DOT = {
+  gap: 10, r: 1.6, sMin: 0.3, sMax: 1.6,
+  base: [0x73, 0x73, 0x73],      // neutral-500, the resting dot
+  glow: [0xFF, 0xFF, 0xFF],      // white at full pulse
+};
+const BUCKETS = 10;
+const PULSE = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const dotCv = document.getElementById('dots');
+const dotCx = dotCv.getContext('2d');
+let dots = null, dotStyle = [], dotDpr = 1;
+let orbCx = 0, orbCy = 0, orbIn = 0;      // CSS px, written by size()
+
+function buildDots(){
+  const dpr = dotDpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = dotCv.width  = Math.max(1, Math.round(innerWidth  * dpr));
+  const h = dotCv.height = Math.max(1, Math.round(innerHeight * dpr));
+  const g = DOT.gap * dpr;
+  const cols = Math.ceil(w / g) + 1, rows = Math.ceil(h / g) + 1;
+  const n = cols * rows;
+  const x = new Float32Array(n), y = new Float32Array(n);
+  const sp = new Float32Array(n), ph = new Float32Array(n);
+  for (let j = 0, k = 0; j < rows; j++){
+    for (let i = 0; i < cols; i++, k++){
+      x[k] = i * g; y[k] = j * g;
+      sp[k] = DOT.sMin + Math.random() * (DOT.sMax - DOT.sMin);
+      ph[k] = Math.random() * Math.PI * 2;
+    }
+  }
+  dots = {x, y, sp, ph, n};
+
+  dotStyle = [];
+  for (let b = 0; b < BUCKETS; b++){
+    const f = BUCKETS > 1 ? b / (BUCKETS - 1) : 1;
+    const c = DOT.base.map((v, i) => Math.round(v + (DOT.glow[i] - v) * f));
+    // white at 0.8 alpha buries the UI. The field is background, not content.
+    dotStyle.push(`rgba(${c[0]},${c[1]},${c[2]},${(0.035 + 0.30 * f).toFixed(3)})`);
+  }
+}
+
+function drawDots(t){
+  if (!dots) return;
+  const W = dotCv.width, H = dotCv.height;
+  dotCx.clearRect(0, 0, W, H);
+  const {x, y, sp, ph, n} = dots;
+  const r = DOT.r * dotDpr, TAU = Math.PI * 2;
+  const cx = orbCx * dotDpr, cy = orbCy * dotDpr, hole = (orbIn * dotDpr) ** 2;
+
+  const paths = new Array(BUCKETS);
+  for (let b = 0; b < BUCKETS; b++) paths[b] = new Path2D();
+
+  for (let k = 0; k < n; k++){
+    const dx = x[k] - cx, dy = y[k] - cy;
+    if (dx*dx + dy*dy < hole) continue;          // masked out anyway
+    const a = PULSE ? 0.5 + 0.5 * Math.sin(t * sp[k] + ph[k])
+                    : 0.5 + 0.5 * Math.sin(ph[k]);   // frozen, still varied
+    let b = (a * BUCKETS) | 0; if (b >= BUCKETS) b = BUCKETS - 1;
+    paths[b].moveTo(x[k] + r, y[k]);
+    paths[b].arc(x[k], y[k], r, 0, TAU);
+  }
+  for (let b = 0; b < BUCKETS; b++){
+    dotCx.fillStyle = dotStyle[b];
+    dotCx.fill(paths[b]);
+  }
+}
+
 const cv = document.getElementById('gl');
 let gl = null, progs = null, buf = null, glOK = false;
 
@@ -760,11 +811,17 @@ function size(){
 
   // Park the twinkle mask over the orb. The canvas fills .orb, so its rect is
   // the orb rect -- no separate lookup, and it follows any layout change.
+  orbCx = r.left + r.width / 2;
+  orbCy = r.top + r.height / 2;
+  orbIn = r.width * 0.44;
   const s = document.documentElement.style;
-  s.setProperty('--orb-x', (r.left + r.width / 2) + 'px');
-  s.setProperty('--orb-y', (r.top + r.height / 2) + 'px');
-  s.setProperty('--orb-in', (r.width * 0.44) + 'px');
+  s.setProperty('--orb-x', orbCx + 'px');
+  s.setProperty('--orb-y', orbCy + 'px');
+  s.setProperty('--orb-in', orbIn + 'px');
   s.setProperty('--orb-out', (r.width * 0.82) + 'px');
+
+  buildDots();
+  drawDots(0);            // paint immediately; the loop takes over from here
 }
 addEventListener('resize', size);
 
@@ -857,7 +914,7 @@ function enterDemo(){
 
 let level = 0, levelT = 0;    // eased audio energy
 let resolved = 0.12, resolvedT = 0.12;
-let drift = 0, tPrev = performance.now();
+let drift = 0, tPrev = performance.now(), dotAcc = 0;
 
 const root = document.documentElement;
 let energyWritten = -1;       // last --energy pushed to CSS
@@ -913,6 +970,13 @@ function frame(){
   // Idle drifts slowly; a loud voice runs it several times faster. Phase is
   // accumulated here so a speed change never jumps the waveform.
   drift += dt * (0.55 + level * 7.5) * (state === 'listening' ? 1.0 : 0.45);
+
+  // ponytail: dots at 30 Hz, not 60. They are decorative and the scoring
+  // thread already runs close to the hop budget on a slow laptop.
+  if (PULSE){
+    dotAcc += dt;
+    if (dotAcc >= 1 / 30){ dotAcc = 0; drawDots(t); }
+  }
 
   if (glOK) {
     const P = (state === 'processing') ? progs.dots : progs.wave;
