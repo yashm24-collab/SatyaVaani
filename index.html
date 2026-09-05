@@ -441,7 +441,7 @@ footer{
 <div class="shell" id="shell" data-state="idle">
 
   <div class="stub" id="stub">Placeholder scorer active &mdash; not a detector. Do not present these numbers.</div>
-  <div class="stub demo" id="demobar">Static demo &mdash; no analysis backend attached. Log entries below are samples, not measurements.</div>
+  <div class="stub demo" id="demobar">Static demo &mdash; no analysis backend. The microphone drives the visuals only; nothing here is analysed.</div>
 
   <header>
     <div class="mark">Satya<em>Vaani</em><span class="dev">SIH26104</span></div>
@@ -793,17 +793,58 @@ let everConnected = false, demoMode = false;
    No evidence maps here on purpose: a Grad-CAM nobody computed is not
    something to put on screen, labelled or not. */
 const SAMPLES = [
-  { demo:true, band:'high', score:0.091, ms:51, windows:12, placeholder:false,
+  { demo:true, tag:'SAMPLE', band:'high', score:0.091, ms:51, windows:12, placeholder:false,
     action:'Strong synthetic indicators -- do not act on this call', agoMin:4,
     series:[0.14,0.11,0.09,0.08,0.12,0.07,0.06,0.10,0.09,0.13,0.08,0.09],
     stats:{windows:13,refused:1,min:0.06,med:0.09,max:0.14,msMed:51,msMax:74,
            behind:false,tookS:'6.4'} },
-  { demo:true, band:'low', score:0.871, ms:46, windows:9, placeholder:false,
+  { demo:true, tag:'SAMPLE', band:'low', score:0.871, ms:46, windows:9, placeholder:false,
     action:'No indicators detected', agoMin:11,
     series:[0.82,0.86,0.90,0.88,0.85,0.91,0.87,0.89,0.86],
     stats:{windows:9,refused:0,min:0.82,med:0.87,max:0.91,msMed:46,msMax:63,
            behind:false,tookS:'4.8'} },
 ];
+
+/* Browser microphone, VISUAL ONLY.
+   Opened only in demo mode. When server.py is running, Python owns the mic
+   via sounddevice and a second capture would fight it for the device.
+   The model is PyTorch and does not exist on a static host, so this drives
+   the waveform and nothing else -- sessions recorded here are logged as
+   "not analysed", never as a verdict. */
+let micStream = null, micCtx = null, micAnalyser = null, micData = null;
+
+async function startMic(){
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({audio:{
+      echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
+    micCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (micCtx.state === 'suspended') await micCtx.resume();
+    micAnalyser = micCtx.createAnalyser();
+    micAnalyser.fftSize = 512;
+    micAnalyser.smoothingTimeConstant = 0.3;
+    micCtx.createMediaStreamSource(micStream).connect(micAnalyser);
+    micData = new Uint8Array(micAnalyser.frequencyBinCount);
+    return true;
+  } catch (e) {
+    console.warn('mic unavailable:', e);   // denied, or not a secure context
+    stopMic();
+    return false;
+  }
+}
+
+function stopMic(){
+  if (micStream) micStream.getTracks().forEach(t => t.stop());
+  if (micCtx && micCtx.state !== 'closed') micCtx.close();
+  micStream = micCtx = micAnalyser = micData = null;
+}
+
+function micLevel(){
+  if (!micAnalyser) return null;
+  micAnalyser.getByteFrequencyData(micData);
+  let sum = 0;
+  for (let i = 0; i < micData.length; i++){ const v = micData[i] / 255; sum += v * v; }
+  return Math.min(Math.sqrt(sum / micData.length) * 3.2, 1);
+}
 
 function enterDemo(){
   demoMode = true;
@@ -850,10 +891,12 @@ function frame(){
   tPrev = now;
   const t = now / 1000;
 
-  // With no backend there is no envelope to react to, so the static demo
-  // drives the wave from a synthetic level. The page says so in a banner.
+  // No backend means no envelope to react to. Prefer the browser mic if the
+  // viewer granted it; fall back to synthetic motion if they did not.
   if (demoMode && state === 'listening'){
-    levelT = Math.max(0, 0.42 + 0.34*Math.sin(t*2.3) + 0.16*Math.sin(t*7.1 + 1.3));
+    const m = micLevel();
+    levelT = m !== null ? m
+      : Math.max(0, 0.42 + 0.34*Math.sin(t*2.3) + 0.16*Math.sin(t*7.1 + 1.3));
   }
 
   // ease toward targets so nothing snaps
@@ -954,15 +997,21 @@ async function poll(){
 
 /* ================================================================== session */
 
-el('rec').addEventListener('click', () => {
+el('rec').addEventListener('click', async () => {
   if (state === 'listening') return finish();
   session = [];
   el('gScore').textContent = '——';
   setAction('Listening for speech…', 'none');
-  setState('listening');
+  setState('listening');          // before the await, so the UI reacts at once
+  if (demoMode){
+    const ok = await startMic();
+    setAction(ok ? 'Listening — visuals only, nothing is being analysed'
+                 : 'Listening — no microphone, showing synthetic motion', 'none');
+  }
 });
 
 function finish(){
+  stopMic();                 // release the device as soon as recording ends
   setState('processing');
   levelT = 0.12;
   const startedAt = Date.now();
@@ -981,9 +1030,12 @@ function finish(){
     const scored = session.filter(d => d.score !== null);
     let entry;
     if (demoMode){
-      // cycle the samples, so both bands are reachable from the demo page
-      const n = history.filter(h => h.demo).length;
-      entry = Object.assign({}, SAMPLES[n % SAMPLES.length], {heat:null});
+      // There is no model on a static host. Say so, rather than dress a
+      // sample up as the result of what the viewer just recorded. The two
+      // seeded SAMPLE cards already show what a real result looks like.
+      entry = {demo:true, tag:'NOT ANALYSED', band:'none', score:null,
+               ms:null, windows:0, placeholder:true, heat:null, series:null,
+               action:'Not analysed — this page has no detection backend'};
     } else if (!scored.length){
       entry = {
         score:null, band:'none',
@@ -1178,7 +1230,7 @@ function renderLog(){
     top.innerHTML =
       `<span class="pip" style="background:rgb(${rgb.join(',')})"></span>` +
       `<span class="bandname" style="color:rgb(${rgb.join(',')})">${h.band}</span>` +
-      (h.demo ? '<span class="sample">SAMPLE</span>' : '') +
+      (h.tag ? `<span class="sample">${h.tag}</span>` : '') +
       `<span class="time">${h.at.toLocaleTimeString()}</span>`;
     card.appendChild(top);
 
