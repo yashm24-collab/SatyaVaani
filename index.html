@@ -713,8 +713,15 @@ function buildDots(){
   for (let j = 0, k = 0; j < rows; j++){
     for (let i = 0; i < cols; i++, k++){
       x[k] = i * g; y[k] = j * g;
-      sp[k] = (DOT.sMin + Math.random() * (DOT.sMax - DOT.sMin)) * DOT.speedScale;
-      ph[k] = Math.random() * Math.PI * 2;
+      // Deterministic per-cell hash, not Math.random(): size() rebuilds on
+      // every resize event, and random values there reshuffle the whole
+      // field. On mobile, where the URL bar fires resize constantly, that
+      // scramble looks like twinkling and hides whether the pulse runs.
+      // Same fract(sin(...)) idiom as hash11() in the fluid-dots shader.
+      const h1 = Math.sin(i * 127.1 + j * 311.7) * 43758.5453;
+      const h2 = Math.sin(i * 269.5 + j * 183.3) * 43758.5453;
+      sp[k] = (DOT.sMin + (h1 - Math.floor(h1)) * (DOT.sMax - DOT.sMin)) * DOT.speedScale;
+      ph[k] = (h2 - Math.floor(h2)) * Math.PI * 2;
     }
   }
   dots = {x, y, sp, ph, n};
