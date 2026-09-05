@@ -69,17 +69,12 @@ header{
   display:flex;align-items:center;gap:16px;
   padding:20px 26px;z-index:30;
 }
-.mark{
-  font-family:"Bricolage Grotesque",system-ui,sans-serif;
-  font-weight:800;font-size:17px;letter-spacing:-.02em;
-  display:flex;align-items:baseline;gap:1px;
-}
-.mark em{font-style:normal;color:var(--dim);font-weight:400}
-.mark .dev{
-  font-family:"JetBrains Mono",monospace;font-size:8.5px;font-weight:500;
-  letter-spacing:.24em;color:var(--dimmer);margin-left:12px;
-  text-transform:uppercase;align-self:center;
-}
+/* The mark ships with its own soft halo baked in. That halo is near-black
+   (mean RGB ~8), so it disappears against --void rather than showing as a
+   grey smudge -- no masking or blend mode needed. */
+.mark{display:flex;align-items:center}
+.mark img{display:block;height:34px;width:auto}
+@media (max-width:640px){ .mark img{height:27px} }
 
 .conn{
   margin-left:auto;display:flex;align-items:center;gap:8px;
@@ -421,7 +416,7 @@ footer{
   <div class="stub demo" id="demobar">Static demo &mdash; no analysis backend. The microphone drives the visuals only; nothing here is analysed.</div>
 
   <header>
-    <div class="mark">Satya<em>Vaani</em><span class="dev">SIH26104</span></div>
+    <div class="mark"><img src="logo.png" alt="SatyaVaani"></div>
     <div class="conn"><span class="dot" id="dot"></span><span id="connlabel">standby</span></div>
     <button class="burger" id="burger" aria-expanded="false" aria-label="Open analysis log">
       <span></span><span></span><span></span>
