@@ -13,17 +13,25 @@ This does NOT tell you the model is accurate. It tells you it is not obviously
 broken. Accuracy comes from train.report() in Colab.
 """
 import argparse
+import shutil
 import sys
+from pathlib import Path
 
 import numpy as np
 
 import satyavaani as sv
 
+ACTIVE_CKPT = "satyavaani.pt"            # the name get_scorer() loads
+ACTIVE_METRICS = "satyavaani.metrics.json"   # the file the UI reads
+
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", default="satyavaani.pt")
+    ap.add_argument("--ckpt", default=ACTIVE_CKPT)
     ap.add_argument("--wav", help="optional: a real recording of your own voice")
+    ap.add_argument("--activate", action="store_true",
+                    help=f"on pass, install this checkpoint and its metrics as "
+                         f"{ACTIVE_CKPT} / {ACTIVE_METRICS}")
     a = ap.parse_args()
 
     print(f"checkpoint: {a.ckpt}")
@@ -106,6 +114,39 @@ def main():
             print("FAIL:", f)
         sys.exit(1)
     print("checkpoint usable (not proof of accuracy - see report() in Colab)")
+
+    if a.activate:
+        activate(a.ckpt)
+
+
+def activate(ckpt):
+    """Install a gated checkpoint as the active pair.
+
+    Weights and their measured numbers move together or not at all. Copying a
+    checkpoint by hand and forgetting its metrics leaves the UI showing one
+    model's threshold beside another model's verdicts -- which has already
+    happened once here, with two different networks both called
+    satyavaani_noise.pt. Going through the gate also means you cannot activate
+    a checkpoint that has not passed it.
+    """
+    src = Path(ckpt)
+    if src.resolve() == Path(ACTIVE_CKPT).resolve():
+        print(f"{ACTIVE_CKPT} is already this file")
+        return
+    shutil.copyfile(src, ACTIVE_CKPT)
+    print(f"activated: {src} -> {ACTIVE_CKPT}")
+
+    metrics = src.with_suffix(".metrics.json")
+    if metrics.exists():
+        shutil.copyfile(metrics, ACTIVE_METRICS)
+        print(f"activated: {metrics} -> {ACTIVE_METRICS}")
+    elif Path(ACTIVE_METRICS).exists():
+        # The stale file belongs to the model being replaced. Leaving it is
+        # worse than having none: the UI would present another model's EER
+        # and threshold as if they described this one.
+        Path(ACTIVE_METRICS).unlink()
+        print(f"removed {ACTIVE_METRICS}: {src.name} has no measured numbers, "
+              f"and the old ones describe a different model")
 
 
 if __name__ == "__main__":

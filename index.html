@@ -523,6 +523,20 @@ footer{
 .upload:active{transform:scale(.97)}
 .upload:focus-within{outline:2px solid var(--chrome-hi);outline-offset:2px}
 
+/* Drop target is the whole window, not a boxed-off zone: you are already
+   looking at the orb, so that is where a file gets dropped. */
+.drop-hint{
+  position:fixed;inset:14px;z-index:70;pointer-events:none;
+  border:1.5px dashed var(--rule-hi);border-radius:22px;
+  background:rgba(5,5,7,.72);backdrop-filter:blur(2px);
+  display:grid;place-items:center;opacity:0;transition:opacity .18s ease;
+}
+.dropping .drop-hint{opacity:1}
+.drop-hint span{
+  font-family:"JetBrains Mono",monospace;font-size:11px;
+  letter-spacing:.22em;text-transform:uppercase;color:var(--bone);
+}
+
 .gauges{grid-column:3;justify-self:end;display:flex;align-items:center;gap:0}
 .g{padding:0 18px;border-left:1px solid var(--rule);min-width:96px}
 .g:first-child{border-left:0}
@@ -709,6 +723,7 @@ footer{
     </button>
   </header>
 
+  <div class="drop-hint" aria-hidden="true"><span>Drop a .wav to score it</span></div>
   <main class="stage">
     <div class="orb">
       <div class="halo"></div>
@@ -1469,12 +1484,32 @@ function finish(){
    windowing with the same sv.verdict() the live path calls, so the result
    lands in the same band -- which is the requirement's own verify criterion. */
 
-el('file').addEventListener('change', async ev => {
+/* One path for both the file picker and a drop, so they cannot diverge. */
+el('file').addEventListener('change', ev => {
   const f = ev.target.files[0];
-  if (!f) return;
   ev.target.value = '';                    // let the same file be picked again
+  uploadFile(f);
+});
+
+let dragDepth = 0;                         // dragenter/leave fire per child
+const showDrop = on => shell.classList.toggle('dropping', on);
+addEventListener('dragenter', e => { e.preventDefault(); if (++dragDepth === 1) showDrop(true); });
+addEventListener('dragover',  e => { e.preventDefault(); });
+addEventListener('dragleave', e => { if (--dragDepth <= 0){ dragDepth = 0; showDrop(false); } });
+addEventListener('drop', e => {
+  e.preventDefault();
+  dragDepth = 0; showDrop(false);
+  uploadFile(e.dataTransfer.files[0]);
+});
+
+async function uploadFile(f){
+  if (!f) return;
   if (demoMode){
     setAction('Upload needs the analysis backend — run python server.py', 'none');
+    return;
+  }
+  if (!/\.wav$/i.test(f.name)){
+    setAction(`${f.name} is not a .wav — the pipeline reads 16-bit PCM wav`, 'none');
     return;
   }
   setState('processing');
@@ -1493,7 +1528,7 @@ el('file').addEventListener('change', async ev => {
     setAction('Upload failed — is server.py running?', 'none');
     setState('idle');
   }
-});
+}
 
 function addUploadSession(d){
   const scored = d.windows.filter(w => w.score !== null);

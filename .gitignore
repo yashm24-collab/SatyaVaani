@@ -1,6 +1,14 @@
 # Trained checkpoints. get_scorer() auto-loads satyavaani.pt, so a stray one
-# silently turns the UI from PLACEHOLDER to "trained" -- never commit them.
+# silently turns the UI from PLACEHOLDER to "trained" -- never commit THAT name.
 *.pt
+*.metrics.json
+
+# models/ is the archive, and everything in it is named <recipe>-<hash8>, so a
+# file there can never collide with another model or be mistaken for the
+# active checkpoint. Two different networks were both called
+# satyavaani_noise.pt once; that is what this naming prevents.
+!models/*.pt
+!models/*.metrics.json
 
 # Feature caches (hundreds of MB) and generated data
 *.npz
@@ -10,10 +18,6 @@ manifest.csv
 # Runtime junk
 *.log
 __pycache__/
-
-# Measured eval numbers written by train.report(). Derived, and a stale one
-# would show old numbers in the UI next to a new checkpoint.
-satyavaani.metrics.json
 
 # Personal / recorded audio. demo_clip.wav is the one committed sample.
 myvoice.wav

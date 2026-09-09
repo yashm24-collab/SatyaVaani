@@ -132,6 +132,31 @@ live, in front of judges, with you as the input.
 It proves the checkpoint is not broken. It does not prove accuracy; that is
 `report()` in Colab.
 
+## Checkpoint naming
+
+`satyavaani.pt` is the **active** checkpoint — the one `get_scorer()` loads and
+the demo runs on. Everything else lives in `models/`, named `<recipe>-<hash8>`:
+
+```
+models/noise-fd8de51c.pt            weights
+models/noise-fd8de51c.metrics.json  the numbers measured on exactly those weights
+```
+
+The hash is there because two different networks were once both called
+`satyavaani_noise.pt`, and their thresholds differed by 0.33 — enough to change
+what the screen tells a user to do. A filename is not an identity.
+
+Install one with the gate, never by hand:
+
+```
+python verify_checkpoint.py --ckpt models/noise-fd8de51c.pt --activate
+```
+
+`--activate` copies the checkpoint **and its metrics** into place together, and
+only after the gate passes. Copying a `.pt` on its own leaves the UI showing
+one model's threshold beside another model's verdicts; if the new checkpoint
+has no metrics, the stale ones are deleted rather than left to mislead.
+
 ## Day 1 checklist
 
 - [ ] everyone: `python satyavaani.py` prints ok

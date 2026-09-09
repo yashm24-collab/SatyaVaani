@@ -19,6 +19,7 @@ The --holdout engine is never trained on. That is the number that matters.
 import argparse
 import csv
 import glob
+import hashlib
 import os
 import random
 import sys
@@ -66,9 +67,13 @@ def main():
     ap.add_argument("--clips", default="clips")
     ap.add_argument("--holdout", required=True,
                     help="engine folder name to hold out of training entirely")
-    ap.add_argument("--init", default="satyavaani_noise.pt",
-                    help="checkpoint to adapt from")
-    ap.add_argument("--out", default="satyavaani_matched.pt")
+    # The active checkpoint, not a named archive file: archives are content
+    # addressed and their names change, and adapting from "whatever is
+    # currently installed" is what you actually mean.
+    ap.add_argument("--init", default="satyavaani.pt",
+                    help="checkpoint to adapt from (default: the active one)")
+    ap.add_argument("--outdir", default="models",
+                    help="where the new checkpoint is written, named by content")
     ap.add_argument("--epochs", type=int, default=15)
     ap.add_argument("--lr", type=float, default=1e-4)
     a = ap.parse_args()
@@ -97,11 +102,29 @@ def main():
 
     net = train.fit(net, splits["train"], epochs=a.epochs, bs=32, lr=a.lr,
                     augment=False)
-    train.report(net, splits)                          # asserts live here
 
-    torch.save(net.state_dict(), a.out)
-    print(f"\nsaved {a.out}")
-    print(f"next:  python verify_checkpoint.py --ckpt {a.out} --wav myvoice.wav")
+    # Written to a pending name first: the hash that names it can only be
+    # computed from the saved bytes, but report() must still be able to reject
+    # the model and leave nothing behind, exactly as it did before.
+    os.makedirs(a.outdir, exist_ok=True)
+    tmp = os.path.join(a.outdir, "matched-pending.pt")
+    tmp_metrics = tmp.replace(".pt", ".metrics.json")
+    torch.save(net.state_dict(), tmp)
+    try:
+        train.report(net, splits, out=tmp_metrics)     # asserts live here
+    except BaseException:
+        os.remove(tmp)                                 # a rejected model is not kept
+        raise
+
+    # Metrics are named for the exact weights they describe, so numbers can
+    # never end up beside a different model.
+    h = hashlib.sha256(open(tmp, "rb").read()).hexdigest()[:8]
+    out = os.path.join(a.outdir, f"matched-{h}.pt")
+    os.replace(tmp, out)
+    os.replace(tmp_metrics, out.replace(".pt", ".metrics.json"))
+
+    print(f"\nsaved {out}")
+    print(f"next:  python verify_checkpoint.py --ckpt {out} --wav myvoice.wav --activate")
 
 
 if __name__ == "__main__":
