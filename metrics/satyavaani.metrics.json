@@ -1,0 +1,12 @@
+{
+  "eer_seen": 0.074,
+  "far_budget": 0.05,
+  "threshold": 0.37542287409305575,
+  "detection_seen": 0.9033333333333333,
+  "false_alarm_seen": 0.05,
+  "eer_unseen": null,
+  "detection_unseen": null,
+  "n_seen": 3000,
+  "n_unseen": 0,
+  "measured_at": "2026-09-05T16:20:43"
+}
