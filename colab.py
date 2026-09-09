@@ -13,6 +13,10 @@ slower and there is no reason to be on Colab at all.
 # CELL 1 -- setup
 # =====================================================================
 CELL_1 = r"""
+# Always start from /content. Without this, re-running the cell clones into
+# the directory you are already in -- /content/repo/repo/repo/repo -- and the
+# imports below then fail in ways that look like a Python path problem.
+%cd /content
 !git clone https://github.com/yashm24-collab/SatyaVaani.git repo
 %cd repo
 !git pull                      # re-run this cell after any local push

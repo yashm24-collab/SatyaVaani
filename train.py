@@ -14,6 +14,7 @@ append your own generated attacks (person 5).
 """
 import argparse
 import csv
+import hashlib
 import os
 import sys
 
@@ -119,6 +120,15 @@ class Cached(torch.utils.data.Dataset):
         return self.x[i].float(), self.y[i]
 
 
+def _fingerprint(rows):
+    """Identity of a row set, so a cache file cannot be mistaken for one built
+    from different clips."""
+    h = hashlib.sha1()
+    for p, l in rows:
+        h.update(repr((str(p), int(l))).encode())
+    return h.hexdigest()
+
+
 def precompute(rows, cache=None, workers=None):
     """Featurise once. Returns (feats, labels) and optionally caches to disk.
 
@@ -129,13 +139,20 @@ def precompute(rows, cache=None, workers=None):
     """
     import concurrent.futures as cf
 
-    if cache and os.path.exists(cache):
-        d = np.load(cache)
-        print(f"loaded cached features {d['x'].shape} from {cache}")
-        return d["x"], d["y"]
-
     paths = [p for p, _ in rows]
     labels = np.array([l for _, l in rows], dtype=np.int64)
+    fp = _fingerprint(rows)
+
+    if cache and os.path.exists(cache):
+        d = np.load(cache)
+        # A filename is not an identity. Keyed on the name alone, raising SUB
+        # and re-running silently returned the OLD feature set while printing
+        # "loaded cached features" -- a wrong result nobody could see.
+        if str(d.get("fp", "")) == fp:
+            print(f"loaded cached features {d['x'].shape} from {cache}")
+            return d["x"], d["y"]
+        print(f"{cache} was built from a different row set "
+              f"({d['x'].shape[0]} clips, now {len(rows)}) - recomputing")
 
     workers = workers or min(8, (os.cpu_count() or 2))
     with cf.ThreadPoolExecutor(workers) as ex:      # numpy releases the GIL
@@ -143,7 +160,7 @@ def precompute(rows, cache=None, workers=None):
     x = np.stack(feats).astype("float16")
 
     if cache:
-        np.savez(cache, x=x, y=labels)
+        np.savez(cache, x=x, y=labels, fp=fp)
         print(f"cached features {x.shape} -> {cache} "
               f"({x.nbytes/1e6:.0f} MB)")
     return x, labels
@@ -274,7 +291,7 @@ def gradcam(net, mel):
     x = torch.from_numpy(np.ascontiguousarray(mel, np.float32))[None, None]
 
     feats = {}
-    last_conv = net.body[2]                       # third block, before pooling
+    last_conv = net.body[2]        # third block; hook fires after its MaxPool
     h = last_conv.register_forward_hook(lambda m, i, o: feats.__setitem__("a", o))
     logit = net(x)
     h.remove()
@@ -428,6 +445,8 @@ if __name__ == "__main__":
     ap.add_argument("--manifest")
     ap.add_argument("--epochs", type=int, default=8)
     ap.add_argument("--out", default="satyavaani.pt")
+    ap.add_argument("--cache", default="feat",
+                    help="feature cache prefix; '' disables caching")
     a = ap.parse_args()
 
     if a.smoke or not a.manifest:
@@ -439,7 +458,16 @@ if __name__ == "__main__":
     print(f"train {len(splits['train'])}  seen {len(splits['seen'])}  "
           f"unseen {len(splits['unseen'])}")
 
-    net = fit(SpoofCNN(), splits["train"], epochs=a.epochs)
-    report(net, splits)
+    # Same path as colab.py, not a slower unweighted variant of it. Featurising
+    # on demand costs ~10 min PER EPOCH on ASVspoof, and an unweighted loss on
+    # a 9:1 spoof:bonafide split learns to say "spoof" and still looks fine.
+    xtr, ytr = precompute(splits["train"], cache=a.cache and a.cache + ".train.npz")
+    xev, yev = precompute(splits["seen"], cache=a.cache and a.cache + ".seen.npz")
+    pw = float((ytr == 0).sum() / max(1, (ytr == 1).sum()))
+    print(f"pos_weight {pw:.2f}")
+
+    net = fit(SpoofCNN(), Cached(xtr, ytr), epochs=a.epochs, bs=64, lr=1e-3,
+              pos_weight=pw)
+    report(net, {"seen": Cached(xev, yev), "unseen": splits["unseen"]})
     torch.save(net.state_dict(), a.out)
     print(f"saved {a.out} -- app.py picks it up automatically")

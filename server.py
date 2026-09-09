@@ -12,6 +12,7 @@ and costs a dependency plus an async story to buy nothing at 2 Hz.
 import json
 import sys
 import threading
+import traceback
 import time
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
@@ -29,6 +30,9 @@ _state = {
     "score": None, "band": "none", "action": "Waiting for audio",
     "placeholder": True, "wave": [0.0] * WAVE_POINTS, "heat": None,
     "ms": None, "behind": False, "seq": 0,
+    # monotonic stamp of the last scored window. /verdict turns this into an
+    # age the browser can act on -- see read of `age_s` below.
+    "ts": None, "error": None,
 }
 _lock = threading.Lock()
 
@@ -50,35 +54,56 @@ def shrink(cam, w=HEAT_W, h=HEAT_H):
 
 
 def run_audio(source, scorer):
-    """Poll the mic, score, publish. One thread, no async."""
+    """Poll the mic, score, publish. One thread, no async.
+
+    The loop body is guarded because an exception here used to kill the thread
+    outright: /verdict kept answering 200 with the last good verdict, the UI
+    kept its LED on "live", and the screen froze on a stale result with nobody
+    the wiser. That is the failure the README calls worse than having no
+    fallback at all. Now the error is published and the stamp stops advancing,
+    so the browser sees the state go stale either way.
+    """
     while True:
-        win = source.get()
-        if win is None:
-            time.sleep(0.05)
-            continue
-        t0 = time.perf_counter()
-        score, band, action = sv.verdict(win, scorer)
+        try:
+            _score_one(source, scorer)
+        except Exception as e:                      # noqa: BLE001 - stay alive
+            with _lock:
+                _state["error"] = f"{type(e).__name__}: {e}"
+            traceback.print_exc()
+            time.sleep(0.5)
 
-        heat = None
-        if score is not None and hasattr(scorer, "explain"):
-            try:
-                heat = shrink(scorer.explain(win))
-            except Exception:
-                heat = None            # evidence is optional; the verdict is not
 
-        wave = envelope(win)
-        # Measured, not asserted. A hardcoded latency on a readout is the kind
-        # of number a judge asks about once. Grad-CAM is ~25 ms on the small
-        # CNN; a pretrained backbone will cost far more, and `behind` says so.
-        ms = (time.perf_counter() - t0) * 1000
+def _score_one(source, scorer):
+    """One window: pull, score, publish. Raising here is safe -- run_audio
+    catches it, records it and keeps the thread alive."""
+    win = source.get()
+    if win is None:
+        time.sleep(0.05)
+        return
+    t0 = time.perf_counter()
+    score, band, action = sv.verdict(win, scorer)
 
-        with _lock:
-            _state.update(
-                score=score, band=band, action=action,
-                placeholder=getattr(scorer, "is_placeholder", False),
-                wave=wave, heat=heat, ms=round(ms, 1),
-                behind=ms > HOP_MS, seq=_state["seq"] + 1,
-            )
+    heat = None
+    if score is not None and hasattr(scorer, "explain"):
+        try:
+            heat = shrink(scorer.explain(win))
+        except Exception:
+            heat = None            # evidence is optional; the verdict is not
+
+    wave = envelope(win)
+    # Measured, not asserted. A hardcoded latency on a readout is the kind
+    # of number a judge asks about once. Grad-CAM is ~25 ms on the small
+    # CNN; a pretrained backbone will cost far more, and `behind` says so.
+    ms = (time.perf_counter() - t0) * 1000
+
+    with _lock:
+        _state.update(
+            score=score, band=band, action=action,
+            placeholder=getattr(scorer, "is_placeholder", False),
+            wave=wave, heat=heat, ms=round(ms, 1),
+            behind=ms > HOP_MS, seq=_state["seq"] + 1,
+            ts=time.monotonic(), error=None,
+        )
 
 
 METRICS_JSON = "satyavaani.metrics.json"
@@ -112,8 +137,14 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/verdict"):
             with _lock:
-                snapshot = dict(_state)
-            self._json(snapshot)
+                snap = dict(_state)
+            ts = snap.pop("ts")
+            # Age of the newest scored window. The browser cannot tell a live
+            # stream from a dead one by watching `seq` alone -- it would have
+            # to remember when that last changed. One number computed here,
+            # and no clock-sync problem between machines.
+            snap["age_s"] = None if ts is None else round(time.monotonic() - ts, 2)
+            self._json(snap)
             return
         if self.path.startswith("/metrics"):
             # `config` is the pipeline's own constants, so the UI draws the
@@ -139,7 +170,53 @@ class Handler(SimpleHTTPRequestHandler):
         pass                      # a request line every 150 ms is not useful
 
 
+def _self_check():
+    """The guard that matters: a scorer that raises must not kill the thread,
+    and the published state must go stale instead of sitting there looking
+    live. Run with:  python server.py --check
+    """
+    # Speech-like, not flat noise: the REQ-6 ceiling refuses structureless
+    # audio, and a refused window never reaches the scorer at all -- so a flat
+    # fixture would test nothing.
+    t = np.arange(int(sv.WINDOW_S * sv.SR)) / sv.SR
+    win = (0.3 * np.sin(2 * np.pi * 180 * t)
+           * (1 + 0.5 * np.sin(2 * np.pi * 3 * t))).astype(np.float32)
+
+    class Source:
+        def get(self):
+            return win
+
+    class Boom:
+        is_placeholder = False
+
+        def score(self, x, sr=sv.SR):
+            raise RuntimeError("scorer exploded")
+
+    _score_one(Source(), sv.HeuristicScorer())
+    assert _state["ts"] is not None, "a healthy window did not stamp ts"
+    assert _state["error"] is None, _state["error"]
+    seq0, ts0 = _state["seq"], _state["ts"]
+
+    print("(the traceback below is the test doing its job)")
+    t = threading.Thread(target=run_audio, args=(Source(), Boom()), daemon=True)
+    t.start()
+    time.sleep(0.9)
+
+    assert t.is_alive(), "scoring thread died - that is the whole point of the guard"
+    assert _state["error"] and "exploded" in _state["error"], _state["error"]
+    assert _state["seq"] == seq0, "seq advanced on a window that failed to score"
+    assert _state["ts"] == ts0, "ts advanced on a window that failed to score"
+
+    age = time.monotonic() - _state["ts"]
+    assert age > 0.5, "stamp is not ageing"
+    print(f"server self-check ok: thread survived, state aged {age:.1f}s "
+          f"while /verdict would still answer 200")
+
+
 def main():
+    if "--check" in sys.argv:
+        _self_check()
+        return
     scorer = sv.get_scorer()
     source = FileMic(sys.argv[1]) if len(sys.argv) > 1 else Mic()
     try:

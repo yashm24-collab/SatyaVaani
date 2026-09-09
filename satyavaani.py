@@ -19,6 +19,11 @@ HOP_S = 0.5        # how often we re-score
 
 MIN_SPEECH_S = 0.6     # REQ-6: below this we refuse to answer
 MIN_RMS = 0.005        # REQ-6: below this it is effectively silence
+# REQ-6 noise ceiling. Deliberately generous: the model itself holds to about
+# 18 dB SNR, so this only fires when speech is genuinely buried. Raise it if
+# the loud-room test shows garbage verdicts getting through; lower it if the
+# venue makes it refuse on audio a person can still follow.
+MIN_SNR_DB = 5.0
 
 
 # ---------------------------------------------------------------- audio io
@@ -199,11 +204,31 @@ def band(score):
     return BANDS[-1][1:]
 
 
+def snr_db(x, frame=400):
+    """Rough SNR: loud frames over the quiet floor, in dB.
+
+    ponytail: a percentile split on frame energy, no VAD. Enough to answer
+    "is this room too loud to say anything useful about", which is all REQ-6
+    needs. Swap in a real VAD if this number ever has to be quoted.
+    """
+    n = (len(x) // frame) * frame
+    if n < frame * 4:
+        return 99.0                       # too short to estimate; length guard catches it
+    e = (x[:n].astype(np.float64).reshape(-1, frame) ** 2).mean(1)
+    noise, speech = np.percentile(e, 10), np.percentile(e, 90)
+    if noise <= 0 or speech <= 0:
+        return 99.0
+    return float(10 * np.log10(speech / noise))
+
+
 def usable(x, sr=SR):
-    """REQ-6. Refuse rather than guess on too-short or too-quiet audio."""
+    """REQ-6. Refuse rather than guess on audio that is too short, too quiet,
+    or too noisy to carry an answer."""
     if len(x) < MIN_SPEECH_S * sr:
         return False
-    return float(np.sqrt(np.mean(x.astype(np.float64) ** 2))) >= MIN_RMS
+    if float(np.sqrt(np.mean(x.astype(np.float64) ** 2))) < MIN_RMS:
+        return False
+    return snr_db(x) >= MIN_SNR_DB
 
 
 def verdict(x, scorer, sr=SR):
@@ -293,17 +318,45 @@ if __name__ == "__main__":
     assert band(0.10)[0] == "high"
     assert band(0.66)[0] == "low" and band(0.33)[0] == "medium"
 
-    # REQ-6 guards: too short, and long but silent
+    # Speech-like: a tone with an amplitude envelope, so it has a loud/quiet
+    # structure the way real speech does. Flat Gaussian noise does not, and
+    # since the REQ-6 ceiling exists precisely to reject signals with no such
+    # structure, it is the wrong stand-in for "usable audio".
+    _t = np.arange(2 * SR) / SR
+    speechy = (0.3 * np.sin(2 * np.pi * 180 * _t)
+               * (1 + 0.5 * np.sin(2 * np.pi * 3 * _t))).astype(np.float32)
+
+    # REQ-6 guards: too short, long but silent, and loud but structureless
     assert not usable(rng.normal(0, 0.3, 1000).astype(np.float32))
     assert not usable(np.zeros(SR, np.float32))
-    assert usable(rng.normal(0, 0.3, 2 * SR).astype(np.float32))
+    assert not usable(rng.normal(0, 0.3, 2 * SR).astype(np.float32))
+    assert usable(speechy)
 
     # verdict refuses instead of guessing
     sc = HeuristicScorer()
     assert verdict(np.zeros(SR, np.float32), sc)[0] is None
 
     # placeholder still returns a usable probability
-    v = verdict(rng.normal(0, 0.3, 2 * SR).astype(np.float32), sc)
+    v = verdict(speechy, sc)
     assert v[0] is not None and 0.0 <= v[0] <= 1.0, v
+
+    # REQ-7: leading and trailing silence must not change the answer. This is
+    # the requirement's own verify criterion, which nothing tested before.
+    t = np.arange(2 * SR) / SR
+    speech = (0.3 * np.sin(2 * np.pi * 180 * t)
+              * (1 + 0.5 * np.sin(2 * np.pi * 3 * t))).astype(np.float32)
+    quiet = np.zeros(2 * SR, np.float32)
+    padded = np.concatenate([quiet, speech, quiet])
+    assert verdict(speech, sc)[1] == verdict(padded, sc)[1], \
+        "REQ-7: padding with silence changed the band"
+
+    # REQ-6 noise ceiling: speech buried in noise is refused, not guessed at
+    clean = rng.normal(0, 0.3, 2 * SR).astype(np.float32)
+    assert snr_db(clean) < 90, "flat noise should not read as high SNR"
+    burst = np.concatenate([np.full(SR, 0.30, np.float32),
+                            np.full(SR, 0.0005, np.float32)])
+    assert snr_db(burst) > MIN_SNR_DB, "clear speech over a quiet floor was refused"
+    assert not usable(np.full(2 * SR, 0.30, np.float32)), \
+        "REQ-6: constant-level noise carries no speech and must be refused"
 
     print("satyavaani self-check ok")

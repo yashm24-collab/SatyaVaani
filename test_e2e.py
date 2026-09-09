@@ -109,11 +109,15 @@ def main():
     # the leak guard must actually fire -- a guard nobody tested is decoration
     leaked = [{"path": "a", "label": "0", "split": "train",  "source": "gen_a"},
               {"path": "b", "label": "0", "split": "unseen", "source": "gen_a"}]
+    # Do not raise AssertionError inside the try -- the except would catch the
+    # test's own failure signal, and this only reported correctly because
+    # "LEAK" is not in "leak guard did not fire". A flag has no such trap.
+    fired = ""
     try:
         train.check_manifest(leaked)
-        raise AssertionError("leak guard did not fire")
     except AssertionError as e:
-        assert "LEAK" in str(e), f"wrong failure: {e}"
+        fired = str(e)
+    assert "LEAK" in fired, f"leak guard did not fire correctly: {fired!r}"
     print("    leak guard fires correctly")
 
     print("2/6 training")

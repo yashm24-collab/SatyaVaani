@@ -211,6 +211,9 @@ header{
   min-height:1.2em;text-wrap:balance;
 }
 .action.swap{opacity:0;transform:translateY(6px)}
+/* Stale: the numbers on screen are no longer current. Fade them rather than
+   leave a confident verdict sitting under a dark LED. */
+.stale .action,.stale .gauges,.stale .kicker{opacity:.3;transition:opacity .5s}
 
 /* ------------------------------------------------------------------ footer */
 footer{
@@ -1020,20 +1023,36 @@ function drawFallback(t){
 
 /* ================================================================== polling */
 
-function setConn(ok){
-  if (ok === connected) return;
+/* A window arrives every HOP_S, so six missed hops is unambiguous while still
+   riding out a slow one (457 ms peak measured) or a GC pause. */
+const STALE_S = 3.0;
+
+function setConn(ok, why){
+  const label = ok ? 'connected' : (why ? 'error' : 'no signal');
+  if (ok === connected && el('connlabel').textContent === label) return;
   connected = ok;
   el('dot').classList.toggle('on', ok);
-  el('connlabel').textContent = ok ? 'connected' : 'no signal';
+  el('connlabel').textContent = label;
+  // Dim the readout as well. A dark LED next to a confident verdict is
+  // precisely what nobody notices -- a stale number has to stop looking
+  // like a current one.
+  shell.classList.toggle('stale', !ok);
+  if (why) console.warn('scoring thread:', why);
 }
 
 async function poll(){
   try {
     const r = await fetch('/verdict', {cache:'no-store'});
     const d = await r.json();
-    setConn(true);
     everConnected = true;
     latest = d;
+
+    // A 200 is not proof the pipeline is alive. The scoring thread can be
+    // dead, or the source stopped delivering, while /verdict keeps answering
+    // with the last good verdict. Freshness is the only real signal.
+    const fresh = d.age_s !== null && d.age_s !== undefined && d.age_s <= STALE_S;
+    setConn(fresh, d.error);
+    if (!fresh) levelT = 0;
 
     el('stub').classList.toggle('on', d.placeholder);
     el('gModel').textContent = d.placeholder ? 'stub' : 'trained';
