@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "satyavaani",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["server.py", "demo_clip.wav"],
+      "port": 8000
+    },
+    {
+      "name": "satyavaani-mic",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["server.py"],
+      "port": 8000
+    }
+  ]
+}
