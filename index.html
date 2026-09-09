@@ -1153,25 +1153,6 @@ let history  = [];            // finished sessions, newest first
 let connected = false;
 let everConnected = false, demoMode = false;
 
-/* Shown ONLY when no backend ever answered -- i.e. the static GitHub Pages
-   copy, where there is no Python to score anything. Marked demo:true so every
-   card carries a SAMPLE tag, and the page carries a banner. A running
-   server.py never seeds these, so the real demo never shows a fake entry.
-   No evidence maps here on purpose: a Grad-CAM nobody computed is not
-   something to put on screen, labelled or not. */
-const SAMPLES = [
-  { demo:true, tag:'SAMPLE', band:'high', score:0.091, ms:51, windows:12, placeholder:false,
-    action:'Strong synthetic indicators -- do not act on this call', agoMin:4,
-    series:[0.14,0.11,0.09,0.08,0.12,0.07,0.06,0.10,0.09,0.13,0.08,0.09],
-    stats:{windows:13,refused:1,min:0.06,med:0.09,max:0.14,msMed:51,msMax:74,
-           behind:false,tookS:'6.4'} },
-  { demo:true, tag:'SAMPLE', band:'low', score:0.871, ms:46, windows:9, placeholder:false,
-    action:'No indicators detected', agoMin:11,
-    series:[0.82,0.86,0.90,0.88,0.85,0.91,0.87,0.89,0.86],
-    stats:{windows:9,refused:0,min:0.82,med:0.87,max:0.91,msMed:46,msMax:63,
-           behind:false,tookS:'4.8'} },
-];
-
 /* Browser microphone, VISUAL ONLY.
    Opened only in demo mode. When server.py is running, Python owns the mic
    via sounddevice and a second capture would fight it for the device.
@@ -1216,8 +1197,6 @@ function micLevel(){
 function enterDemo(){
   demoMode = true;
   el('demobar').classList.add('on');
-  SAMPLES.forEach(s => history.push(
-    Object.assign({}, s, {at:new Date(Date.now() - s.agoMin*60000), heat:null})));
   setAction('Static demo — press record to see the states', 'none');
   renderLog();
 }
