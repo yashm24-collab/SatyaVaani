@@ -23,3 +23,7 @@ __pycache__/
 myvoice.wav
 clips/
 fakes/
+
+# Superseded reference models kept locally but not shipped.
+models/augon-*.pt
+models/augoff-*.pt
