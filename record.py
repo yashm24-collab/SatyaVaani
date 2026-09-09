@@ -68,13 +68,66 @@ def check(x):
     return None
 
 
+def probe_outputs(in_device=None, freq=1000.0, dur=0.7):
+    """Find an output device the microphone can actually hear.
+
+    Matched-channel recording only works if the speaker and the mic share a
+    room. The default output is frequently a headset, and playing a clone into
+    an earphone yields a folder of room noise labelled spoof -- which teaches
+    the model that background hiss is synthetic. This plays a tone on every
+    output and measures how much of it comes back.
+    """
+    import sounddevice as sd
+
+    t = np.arange(int(dur * SR)) / SR
+    tone = (0.35 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+    outs = [(i, d) for i, d in enumerate(sd.query_devices())
+            if d["max_output_channels"] > 0]
+
+    print(f"playing a {freq:.0f} Hz tone on {len(outs)} outputs, "
+          f"listening on input {in_device if in_device is not None else 'default'}\n")
+    results = []
+    for i, d in outs:
+        try:
+            rec = sd.playrec(tone[:, None], samplerate=SR, channels=1,
+                             dtype="float32", device=(in_device, i))
+            sd.wait()
+            x = rec[:, 0]
+            S = np.abs(np.fft.rfft(x))
+            fr = np.fft.rfftfreq(len(x), 1 / SR)
+            k = int(np.argmin(np.abs(fr - freq)))
+            ratio = float(S[max(0, k - 3):k + 4].sum() / (S.sum() + 1e-9))
+            results.append((ratio, i, d["name"]))
+            print(f"  [{i:2d}] {d['name'][:42]:<42} {ratio:6.1%} "
+                  f"{'#' * min(30, int(ratio * 120))}")
+        except Exception as e:
+            print(f"  [{i:2d}] {d['name'][:42]:<42}    -- {type(e).__name__}")
+
+    results.sort(reverse=True)
+    if results and results[0][0] > 0.05:
+        r, i, name = results[0]
+        print(f"\nuse:  --out-device {i}   ({name.strip()}, "
+              f"tone came back at {r:.0%})")
+        return i
+    print("\nNo output was audible to the microphone. Check the volume is up, "
+          "nothing is muted, and headphones are unplugged.")
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("outdir")
     ap.add_argument("count", type=int, nargs="?",
                     help="how many clips to record (omit when using --play)")
     ap.add_argument("--dur", type=float, default=6.0)
-    ap.add_argument("--device", type=int)
+    ap.add_argument("--device", type=int, help="input (microphone) device index")
+    # Separate from --device on purpose. The default output is often a headset,
+    # and playing a clone into an earphone means the microphone never hears it:
+    # you get a folder of room noise labelled as spoof, which teaches the model
+    # that background hiss is synthetic. `python record.py --probe` finds an
+    # output the microphone can actually hear.
+    ap.add_argument("--out-device", type=int, dest="out_device",
+                    help="output (speaker) device index for --play")
     ap.add_argument("--play", metavar="DIR",
                     help="play every audio file in DIR through the speakers and "
                          "record each one back through the mic")
@@ -114,7 +167,8 @@ def main():
                   f"({len(y)/SR:.1f}s)...")
             y = np.append(y, np.zeros(int(TAIL_S * SR), np.float32))
             x = sd.playrec(y[:, None], samplerate=SR, channels=1,
-                           dtype="float32", device=a.device)
+                           dtype="float32",
+                           device=(a.device, a.out_device))
         else:
             input(f"[{n - start + 1}/{a.count}] press Enter, then speak "
                   f"for {a.dur:.0f}s... ")
