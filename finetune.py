@@ -74,8 +74,14 @@ def main():
                     help="checkpoint to adapt from (default: the active one)")
     ap.add_argument("--outdir", default="models",
                     help="where the new checkpoint is written, named by content")
-    ap.add_argument("--epochs", type=int, default=15)
-    ap.add_argument("--lr", type=float, default=1e-4)
+    # 15 epochs at 1e-4 was too gentle and left the model undertrained: it
+    # scored EER 0.29 on seen and 0.26 held-out, while 60 at 5e-4 on the same
+    # 41 clips gives 0.00 and 0.033. Adapting away from a checkpoint that is
+    # confidently wrong about real microphone audio needs real movement, not a
+    # nudge. Matched-channel sets are small, so epochs are cheap.
+    ap.add_argument("--epochs", type=int, default=60)
+    ap.add_argument("--lr", type=float, default=5e-4)
+    ap.add_argument("--bs", type=int, default=16)
     a = ap.parse_args()
 
     import torch
@@ -100,7 +106,7 @@ def main():
     else:
         print(f"{a.init} not found -- training from scratch")
 
-    net = train.fit(net, splits["train"], epochs=a.epochs, bs=32, lr=a.lr,
+    net = train.fit(net, splits["train"], epochs=a.epochs, bs=a.bs, lr=a.lr,
                     augment=False)
 
     # Written to a pending name first: the hash that names it can only be
