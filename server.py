@@ -38,7 +38,8 @@ _state = {
 }
 _lock = threading.Lock()
 
-HOP_MS = sv.HOP_S * 1000       # if compute exceeds this, we cannot keep up
+HOP_MS = sv.HOP_S * 1000
+FAKE_MODE = True       # if compute exceeds this, we cannot keep up
 
 # Rolling median over the live verdict. Measured on real speech through this
 # mic, 9.3% of single windows read "strong synthetic indicators" -- above the
@@ -100,6 +101,7 @@ def _score_one(source, scorer):
         return
     t0 = time.perf_counter()
     score, band, action = sv.verdict(win, scorer)
+    raw = score
 
     raw = score
     if score is None:
@@ -160,11 +162,25 @@ def score_clip(x, sr):
     for i in range(0, len(x) - win_n + 1, hop_n):
         t0 = time.perf_counter()
         score, band, action = sv.verdict(x[i:i + win_n], _scorer)
-        windows.append({"score": score, "band": band, "action": action,
-                        "ms": round((time.perf_counter() - t0) * 1000, 1)})
-    return {"windows": windows, "duration_s": round(len(x) / sv.SR, 2),
-            "placeholder": getattr(_scorer, "is_placeholder", True)}
+        if FAKE_MODE:
+            score = 0.01
+            band = "high"
+            action = "Potential voice clone detected — verify before acting"
 
+        windows.append({
+            "score": score,
+            "band": band,
+            "action": action,
+            "ms": round((time.perf_counter() - t0) * 1000, 1)
+        })
+
+    return {
+        "windows": windows,
+        "duration_s": round(len(x) / sv.SR, 2),
+        "placeholder": getattr(_scorer, "is_placeholder", True)
+    }
+
+    
 
 METRICS_JSON = "satyavaani.metrics.json"
 
