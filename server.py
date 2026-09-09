@@ -9,6 +9,7 @@ JSON blob per window, polled over plain HTTP.
 ponytail: stdlib http.server + polling. A websocket would be the "right" answer
 and costs a dependency plus an async story to buy nothing at 2 Hz.
 """
+import io
 import json
 import sys
 import threading
@@ -106,6 +107,38 @@ def _score_one(source, scorer):
         )
 
 
+MAX_UPLOAD = 25 * 1024 * 1024      # a 2 s window at 16 kHz is 64 KB; 25 MB is generous
+_scorer = None                     # set by main(), shared with the upload path
+
+
+def score_clip(x, sr):
+    """REQ-2: score an uploaded clip through the IDENTICAL pipeline.
+
+    Same 2 s window, same 0.5 s hop, same sv.verdict() call the live path
+    makes -- not a parallel implementation that could drift from it. That is
+    what makes the requirement's verify criterion meaningful: the same clip
+    via mic and via upload has to land in the same band.
+    """
+    if sr != sv.SR:
+        idx = np.linspace(0, len(x) - 1, int(len(x) * sv.SR / sr))
+        x = np.interp(idx, np.arange(len(x)), x)
+    x = np.ascontiguousarray(x, dtype=np.float32)
+
+    win_n, hop_n = int(sv.WINDOW_S * sv.SR), int(sv.HOP_S * sv.SR)
+    if len(x) < win_n:
+        return {"error": f"clip is {len(x)/sv.SR:.1f}s; need at least "
+                         f"{sv.WINDOW_S:.1f}s to fill one window"}
+
+    windows = []
+    for i in range(0, len(x) - win_n + 1, hop_n):
+        t0 = time.perf_counter()
+        score, band, action = sv.verdict(x[i:i + win_n], _scorer)
+        windows.append({"score": score, "band": band, "action": action,
+                        "ms": round((time.perf_counter() - t0) * 1000, 1)})
+    return {"windows": windows, "duration_s": round(len(x) / sv.SR, 2),
+            "placeholder": getattr(_scorer, "is_placeholder", True)}
+
+
 METRICS_JSON = "satyavaani.metrics.json"
 
 
@@ -133,6 +166,32 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def do_POST(self):
+        """REQ-2 upload. Raw wav bytes in the body, no multipart.
+
+        ponytail: the browser can POST a File directly, so there is nothing to
+        parse -- which also sidesteps `cgi` being gone in Python 3.13.
+        """
+        if not self.path.startswith("/upload"):
+            self.send_error(404)
+            return
+        n = int(self.headers.get("Content-Length") or 0)
+        if not 0 < n <= MAX_UPLOAD:
+            self._json({"error": f"expected 1 to {MAX_UPLOAD // 1024 // 1024} MB, "
+                                 f"got {n} bytes"})
+            return
+        raw = self.rfile.read(n)
+        try:
+            x, sr = sv.load_wav(io.BytesIO(raw))
+        except Exception as e:
+            self._json({"error": f"not a 16-bit PCM wav ({e})"})
+            return
+        try:
+            self._json(score_clip(x, sr))
+        except Exception as e:
+            traceback.print_exc()
+            self._json({"error": f"{type(e).__name__}: {e}"})
 
     def do_GET(self):
         if self.path.startswith("/verdict"):
@@ -217,7 +276,8 @@ def main():
     if "--check" in sys.argv:
         _self_check()
         return
-    scorer = sv.get_scorer()
+    global _scorer
+    scorer = _scorer = sv.get_scorer()
     source = FileMic(sys.argv[1]) if len(sys.argv) > 1 else Mic()
     try:
         source.start()

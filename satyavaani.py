@@ -34,7 +34,10 @@ def load_wav(path):
     ponytail: `wave` covers the demo clips. train.py uses torchaudio, which
     reads the FLAC that ASVspoof actually ships.
     """
-    with wave.open(str(path), "rb") as w:
+    # Accepts a path or an open binary file. REQ-2 uploads arrive as bytes and
+    # have no path; str() on a BytesIO would stringify the object.
+    src = path if hasattr(path, "read") else str(path)
+    with wave.open(src, "rb") as w:
         if w.getsampwidth() != 2:
             raise ValueError("expected 16-bit PCM")
         raw = w.readframes(w.getnframes())
