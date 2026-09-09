@@ -46,12 +46,17 @@ def main():
                             + 0.05 * rng.normal(size=n),
     }
 
+    # scorer.score(), not verdict(): these probes exist to interrogate the
+    # MODEL, and several are deliberately flat or tonal -- exactly what the
+    # REQ-6 guards refuse as unusable input. Going through verdict() would
+    # return None for those and the gate would be measuring input validation
+    # instead of the checkpoint.
     print("\nprobe                score  band")
     scores = []
     for name, x in probes.items():
-        s, band, _ = sv.verdict(x.astype(np.float32), scorer)
+        s = float(scorer.score(x.astype(np.float32)))
         scores.append(s)
-        print(f"  {name:<18} {s:.3f}  {band}")
+        print(f"  {name:<18} {s:.3f}  {sv.band(s)[0]}")
 
     fails = []
 
